@@ -22,6 +22,7 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'email_verified_at', // allow email verification to be saved via update()
         'role',
         'status',
         'rejection_reason',

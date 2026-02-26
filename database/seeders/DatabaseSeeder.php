@@ -21,7 +21,7 @@ class DatabaseSeeder extends Seeder
                 'role' => 'admin',
                 'status' => 'approved',
                 'email_verified_at' => now(),
-            ]);
+            ]);     
         }
     }
 }

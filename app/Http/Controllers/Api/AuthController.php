@@ -4,11 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Mail\OtpMail;
+use App\Mail\ResetPasswordMail;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
 
@@ -25,25 +28,20 @@ class AuthController extends Controller
     private const OTP_EXIRY_MINUTES = 15;
 
     /**
+     * Password reset token expiry in minutes.
+     */
+    private const RESET_TOKEN_EXPIRE_MINUTES = 60;
+
+    /**
      * Register a new officer (status: pending). Sends OTP to email for verification.
+     * If the email already exists but is not verified, updates the user and sends a new OTP
+     * so they can try again. Resend OTP can be used repeatedly until the correct OTP is entered.
      */
     public function register(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
-            'email' => [
-                'required',
-                'string',
-                'email',
-                'max:255',
-                'unique:users,email',
-                function ($attribute, $value, $fail) {
-                    $domain = strtolower(substr(strrchr($value, '@'), 1));
-                    if ($domain !== self::INSTITUTIONAL_EMAIL_DOMAIN) {
-                        $fail('Please use your institutional DepEd email (@deped.gov.ph).');
-                    }
-                },
-            ],
+            'email' => ['required', 'string', 'email', 'max:255'],
             'password' => ['required', 'confirmed', Password::defaults()],
             'employee_id' => ['required', 'string', 'max:100'],
             'position' => ['required', 'string', 'max:255'],
@@ -51,17 +49,37 @@ class AuthController extends Controller
             'school_name' => ['required', 'string', 'max:255'],
         ]);
 
-        $user = User::create([
-            'name' => $validated['name'],
-            'email' => $validated['email'],
-            'password' => $validated['password'],
-            'role' => 'officer',
-            'status' => 'pending',
-            'employee_id' => $validated['employee_id'],
-            'position' => $validated['position'],
-            'division' => $validated['division'],
-            'school_name' => $validated['school_name'],
-        ]);
+        $existing = User::where('email', $validated['email'])->first();
+
+        if ($existing && $existing->email_verified_at) {
+            throw ValidationException::withMessages([
+                'email' => ['This email is already registered. Please sign in.'],
+            ]);
+        }
+
+        if ($existing && ! $existing->email_verified_at) {
+            $existing->update([
+                'name' => $validated['name'],
+                'password' => $validated['password'],
+                'employee_id' => $validated['employee_id'],
+                'position' => $validated['position'],
+                'division' => $validated['division'],
+                'school_name' => $validated['school_name'],
+            ]);
+            $user = $existing;
+        } else {
+            $user = User::create([
+                'name' => $validated['name'],
+                'email' => $validated['email'],
+                'password' => $validated['password'],
+                'role' => 'officer',
+                'status' => 'pending',
+                'employee_id' => $validated['employee_id'],
+                'position' => $validated['position'],
+                'division' => $validated['division'],
+                'school_name' => $validated['school_name'],
+            ]);
+        }
 
         $this->sendOtpToUser($user);
 
@@ -153,6 +171,90 @@ class AuthController extends Controller
     }
 
     /**
+     * Forgot password: send reset link to email if account exists.
+     * Always returns the same success message to prevent email enumeration.
+     */
+    public function forgotPassword(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'email' => ['required', 'string', 'email'],
+        ]);
+
+        $user = User::where('email', $validated['email'])->first();
+
+        if ($user) {
+            $token = Str::random(64);
+            $hashedToken = Hash::make($token);
+
+            DB::table('password_reset_tokens')->updateOrInsert(
+                ['email' => $user->email],
+                [
+                    'token' => $hashedToken,
+                    'created_at' => now(),
+                ]
+            );
+
+            $frontendUrl = rtrim(config('app.frontend_url'), '/');
+            $resetUrl = $frontendUrl . '/reset-password?token=' . urlencode($token) . '&email=' . urlencode($user->email);
+
+            Mail::to($user->email)->send(new ResetPasswordMail(
+                $resetUrl,
+                $user->name,
+                self::RESET_TOKEN_EXPIRE_MINUTES
+            ));
+        }
+
+        return response()->json([
+            'message' => 'If an account exists with this email, a password reset link has been sent. Please check your inbox.',
+            'success' => true,
+        ]);
+    }
+
+    /**
+     * Reset password: validate token and set new password.
+     */
+    public function resetPassword(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'email' => ['required', 'string', 'email'],
+            'token' => ['required', 'string'],
+            'password' => ['required', 'confirmed', Password::defaults()],
+        ]);
+
+        $row = DB::table('password_reset_tokens')->where('email', $validated['email'])->first();
+
+        if (! $row || ! Hash::check($validated['token'], $row->token)) {
+            throw ValidationException::withMessages([
+                'token' => ['This password reset link is invalid or has expired. Please request a new one.'],
+            ]);
+        }
+
+        $createdAt = \Carbon\Carbon::parse($row->created_at);
+        if ($createdAt->copy()->addMinutes(self::RESET_TOKEN_EXPIRE_MINUTES)->isPast()) {
+            DB::table('password_reset_tokens')->where('email', $validated['email'])->delete();
+            throw ValidationException::withMessages([
+                'token' => ['This password reset link has expired. Please request a new one.'],
+            ]);
+        }
+
+        $user = User::where('email', $validated['email'])->first();
+        if (! $user) {
+            DB::table('password_reset_tokens')->where('email', $validated['email'])->delete();
+            throw ValidationException::withMessages([
+                'email' => ['No account found for this email.'],
+            ]);
+        }
+
+        $user->update(['password' => $validated['password']]);
+        DB::table('password_reset_tokens')->where('email', $validated['email'])->delete();
+
+        return response()->json([
+            'message' => 'Your password has been reset successfully. You can now sign in with your new password.',
+            'success' => true,
+        ]);
+    }
+
+    /**
      * Login: returns token + user. Officers must be approved.
      */
     public function login(Request $request): JsonResponse
@@ -166,29 +268,23 @@ class AuthController extends Controller
 
         if (! $user || ! Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
-                'email' => ['The provided credentials are incorrect.'],
+                'email' => ['Invalid credentials.'],
             ]);
         }
 
-        // Officers must have verified their email before they can log in (even when pending approval)
+        // Officers must have verified their email before they can log in. Do not reveal that the email exists.
         if ($user->role === 'officer' && ! $user->email_verified_at) {
-            return response()->json([
-                'message' => 'Please verify your email first. Check your inbox for the OTP we sent.',
-                'status' => 'email_not_verified',
-            ], 403);
+            throw ValidationException::withMessages([
+                'email' => ['Invalid credentials.'],
+            ]);
         }
 
-        if (! $user->isApproved()) {
-            if ($user->status === 'rejected') {
-                return response()->json([
-                    'message' => 'Your account has been rejected.',
-                    'reason' => $user->rejection_reason,
-                    'status' => 'rejected',
-                ], 403);
-            }
+        // Rejected users cannot log in. Pending users can log in and see the dashboard (with a pending message).
+        if ($user->status === 'rejected') {
             return response()->json([
-                'message' => 'Your account is pending approval. Please wait for an administrator to approve your account.',
-                'status' => 'pending',
+                'message' => 'Your account has been rejected.',
+                'reason' => $user->rejection_reason,
+                'status' => 'rejected',
             ], 403);
         }
 
