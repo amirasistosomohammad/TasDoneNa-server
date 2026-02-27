@@ -13,19 +13,20 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        if (! User::where('email', 'admin@deped.gov.ph')->exists()) {
-            User::create([
+        User::updateOrCreate(
+            ['email' => 'admin@deped.gov.ph'],
+            [
                 'name' => 'TasDoneNa Admin',
-                'email' => 'admin@deped.gov.ph',
-                'password' => Hash::make('password'),
+                'password' => Hash::make('123456'),
                 'role' => 'admin',
                 'status' => 'approved',
                 'email_verified_at' => now(),
-            ]);
-        }
+            ]
+        );
 
         $this->call([
             PendingOfficersSeeder::class,
+            PersonnelDirectorySeeder::class,
         ]);
     }
 }

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Mail\OfficerApprovalMail;
 use App\Mail\OfficerDeactivationMail;
 use App\Mail\OfficerRejectionMail;
+use App\Models\Task;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -235,6 +236,42 @@ class AdminController extends Controller
         return response()->json([
             'message' => 'User rejected.',
             'user' => $user->only(['id', 'name', 'email', 'status']),
+        ]);
+    }
+
+    /**
+     * Soft-delete a rejected officer with no activity (admin only).
+     * Safeguards: only rejected status, no tasks assigned to or created by this user.
+     */
+    public function deleteOfficer(Request $request, int $id): JsonResponse
+    {
+        $user = User::where('role', 'officer')->find($id);
+
+        if (! $user) {
+            throw ValidationException::withMessages([
+                'id' => ['Personnel not found.'],
+            ]);
+        }
+
+        if ($user->status !== 'rejected') {
+            return response()->json([
+                'message' => 'Only rejected personnel with no activity can be removed.',
+            ], 422);
+        }
+
+        $hasAssignedTasks = Task::where('assigned_to', $user->id)->exists();
+        $hasCreatedTasks = Task::where('created_by', $user->id)->exists();
+
+        if ($hasAssignedTasks || $hasCreatedTasks) {
+            return response()->json([
+                'message' => 'This personnel has activity in the system (tasks assigned or created) and cannot be removed.',
+            ], 422);
+        }
+
+        $user->delete();
+
+        return response()->json([
+            'message' => 'Personnel removed from directory.',
         ]);
     }
 }

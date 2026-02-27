@@ -26,6 +26,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/users/{id}/reject', [AdminController::class, 'reject']);
         Route::post('/users/{id}/deactivate', [AdminController::class, 'deactivateOfficer']);
         Route::post('/users/{id}/activate', [AdminController::class, 'activateOfficer']);
+        Route::delete('/users/{id}', [AdminController::class, 'deleteOfficer']);
         // Phase 3: Task management
         Route::get('/tasks', [TaskController::class, 'index']);
         Route::get('/tasks/officers', [TaskController::class, 'officers']);
