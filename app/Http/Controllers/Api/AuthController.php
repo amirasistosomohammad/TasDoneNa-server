@@ -182,7 +182,8 @@ class AuthController extends Controller
 
         $user = User::where('email', $validated['email'])->first();
 
-        if ($user) {
+        // Only send reset link if the account exists and email is verified (OTP completed).
+        if ($user && $user->email_verified_at) {
             $token = Str::random(64);
             $hashedToken = Hash::make($token);
 
@@ -204,6 +205,7 @@ class AuthController extends Controller
             ));
         }
 
+        // Always return the same message (no hint that email is unverified or missing).
         return response()->json([
             'message' => 'If an account exists with this email, a password reset link has been sent. Please check your inbox.',
             'success' => true,
@@ -288,6 +290,16 @@ class AuthController extends Controller
             ], 403);
         }
 
+        // Deactivated officers cannot log in; include reason so frontend can show a dedicated message/modal.
+        // Use !$user->is_active so we block when DB returns 0 (uncast) or false (cast).
+        if ($user->role === 'officer' && ! $user->is_active) {
+            return response()->json([
+                'message' => 'Your account has been deactivated.',
+                'reason' => $user->deactivation_reason,
+                'status' => 'deactivated',
+            ], 403);
+        }
+
         $user->tokens()->where('name', 'auth')->delete();
         $token = $user->createToken('auth')->plainTextToken;
 
@@ -295,7 +307,7 @@ class AuthController extends Controller
             'message' => 'Login successful.',
             'token' => $token,
             'token_type' => 'Bearer',
-            'user' => $user->only(['id', 'name', 'email', 'role', 'status', 'employee_id', 'position', 'division', 'school_name']),
+            'user' => $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']),
         ]);
     }
 
@@ -310,13 +322,32 @@ class AuthController extends Controller
     }
 
     /**
-     * Get authenticated user.
+     * Get authenticated user. Deactivated or rejected users get 403 and their token is revoked.
      */
     public function user(Request $request): JsonResponse
     {
         $user = $request->user();
+
+        if ($user->status === 'rejected') {
+            $request->user()->currentAccessToken()->delete();
+            return response()->json([
+                'message' => 'Your account has been rejected.',
+                'reason' => $user->rejection_reason,
+                'status' => 'rejected',
+            ], 403);
+        }
+
+        if ($user->role === 'officer' && ! $user->is_active) {
+            $request->user()->currentAccessToken()->delete();
+            return response()->json([
+                'message' => 'Your account has been deactivated.',
+                'reason' => $user->deactivation_reason,
+                'status' => 'deactivated',
+            ], 403);
+        }
+
         return response()->json([
-            'user' => $user->only(['id', 'name', 'email', 'role', 'status', 'employee_id', 'position', 'division', 'school_name']),
+            'user' => $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']),
         ]);
     }
 }

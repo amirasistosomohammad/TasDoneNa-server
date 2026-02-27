@@ -13,6 +13,6 @@
     <p>This code expires in <strong>15 minutes</strong>. Do not share it with anyone.</p>
     <p>If you did not register for TasDoneNa, you can ignore this email.</p>
     <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
-    <p style="font-size: 12px; color: #888;">TasDoneNa — Task Management for Public School Administrative Officers, Tigbao District</p>
+    <p style="font-size: 12px; color: #888;">TasDoneNa — Task Management for Public School Administrative Personnel, Tigbao District</p>
 </body>
 </html>

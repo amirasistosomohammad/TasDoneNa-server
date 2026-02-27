@@ -25,7 +25,10 @@ class User extends Authenticatable
         'email_verified_at', // allow email verification to be saved via update()
         'role',
         'status',
+        'is_active',
         'rejection_reason',
+        'approval_remarks',
+        'deactivation_reason',
         'employee_id',
         'position',
         'division',
@@ -43,6 +46,7 @@ class User extends Authenticatable
         'password',
         'remember_token',
         'rejection_reason',
+        'deactivation_reason',
         'otp',
     ];
 
@@ -57,6 +61,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'otp_expires_at' => 'datetime',
             'password' => 'hashed',
+            'is_active' => 'boolean',
         ];
     }
 

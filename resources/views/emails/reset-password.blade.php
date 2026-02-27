@@ -16,6 +16,6 @@
     <p style="font-size: 13px; word-break: break-all; color: #243047;">{{ $resetUrl }}</p>
     <p style="font-size: 14px; color: #6b7280;">This link expires in <strong>{{ $expireMinutes }} minutes</strong>. If you did not request a password reset, you can ignore this email.</p>
     <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
-    <p style="font-size: 12px; color: #888;">TasDoneNa — Task Management for Public School Administrative Officers, Tigbao District</p>
+    <p style="font-size: 12px; color: #888;">TasDoneNa — Task Management for Public School Administrative Personnel, Tigbao District</p>
 </body>
 </html>
