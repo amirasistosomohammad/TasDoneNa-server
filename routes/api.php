@@ -62,10 +62,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Accomplishment Reports (Phase 3.1, 3.2)
         Route::get('/accomplishment-reports', [AccomplishmentReportController::class, 'index']);
-        Route::post('/accomplishment-reports/export', [AccomplishmentReportController::class, 'exportFromPeriod']);
+        Route::post('/accomplishment-reports/export', [AccomplishmentReportController::class, 'exportFromPeriod'])
+            ->middleware('accomplishment_export_timeout');
         Route::post('/accomplishment-reports', [AccomplishmentReportController::class, 'store']);
         Route::get('/accomplishment-reports/{id}', [AccomplishmentReportController::class, 'show']);
-        Route::get('/accomplishment-reports/{id}/export', [AccomplishmentReportController::class, 'export']);
+        Route::get('/accomplishment-reports/{id}/export', [AccomplishmentReportController::class, 'export'])
+            ->middleware('accomplishment_export_timeout');
         Route::put('/accomplishment-reports/{id}', [AccomplishmentReportController::class, 'update']);
     });
 
@@ -87,12 +89,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/tasks/{id}', [TaskController::class, 'show']);
         Route::get('/tasks/{id}/files', [TaskController::class, 'adminTaskFiles']);
         Route::get('/tasks/{id}/files/{fileId}/download', [TaskController::class, 'adminDownloadFile']);
-
-        // Accomplishment Reports (Phase 3.1, 3.3, 3.4)
-        Route::get('/accomplishment-reports', [AccomplishmentReportController::class, 'index']);
-        Route::get('/accomplishment-reports/{id}', [AccomplishmentReportController::class, 'show']);
-        Route::get('/accomplishment-reports/{id}/export', [AccomplishmentReportController::class, 'export']);
-        Route::post('/accomplishment-reports/{id}/note', [AccomplishmentReportController::class, 'note']);
 
         // System Settings (admin only)
         Route::put('/settings', [SettingsController::class, 'update']);

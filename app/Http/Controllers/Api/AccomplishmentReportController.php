@@ -7,9 +7,9 @@ use App\Models\AccomplishmentReport;
 use App\Models\Task;
 use App\Models\User;
 use App\Services\AccomplishmentReportExcelExportService;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -17,20 +17,17 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 class AccomplishmentReportController extends Controller
 {
     /**
-     * List accomplishment reports.
-     * Personnel: own reports only
-     * Admin: all reports
+     * List accomplishment reports (officers: own reports only).
      */
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        $query = AccomplishmentReport::with(['user:id,name,email', 'notedBy:id,name']);
-
-        if ($user->role === 'officer') {
-            // Personnel: only own reports
-            $query->where('user_id', $user->id);
+        if ($user->role !== 'officer') {
+            return response()->json(['message' => 'Unauthorized.'], 403);
         }
-        // Admin: all reports (no filter)
+
+        $query = AccomplishmentReport::with(['user:id,name,email', 'notedBy:id,name'])
+            ->where('user_id', $user->id);
 
         $status = $request->input('status');
         if ($status && in_array($status, ['draft', 'submitted', 'noted'], true)) {
@@ -68,8 +65,7 @@ class AccomplishmentReportController extends Controller
             return response()->json(['message' => 'Accomplishment report not found.'], 404);
         }
 
-        // Personnel can only view own reports
-        if ($user->role === 'officer' && $report->user_id !== $user->id) {
+        if ($user->role !== 'officer' || $report->user_id !== $user->id) {
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 
@@ -253,56 +249,21 @@ class AccomplishmentReportController extends Controller
     }
 
     /**
-     * Admin: Note (approve) accomplishment report.
-     */
-    public function note(Request $request, int $id): JsonResponse
-    {
-        $user = $request->user();
-
-        if ($user->role !== 'admin') {
-            return response()->json(['message' => 'Only administrators can note reports.'], 403);
-        }
-
-        $report = AccomplishmentReport::find($id);
-
-        if (! $report) {
-            return response()->json(['message' => 'Accomplishment report not found.'], 404);
-        }
-
-        if ($report->status !== 'submitted') {
-            return response()->json(['message' => 'Only submitted reports can be noted.'], 422);
-        }
-
-        $validated = $request->validate([
-            'admin_remarks' => ['nullable', 'string', 'max:5000'],
-        ]);
-
-        $report->update([
-            'status' => 'noted',
-            'noted_by' => $user->id,
-            'noted_at' => now(),
-            'admin_remarks' => $validated['admin_remarks'] ?? null,
-        ]);
-
-        $report->load(['user:id,name,email', 'notedBy:id,name']);
-
-        return response()->json([
-            'message' => 'Accomplishment report noted successfully.',
-            'report' => $report,
-        ]);
-    }
-
-    /**
      * @return list<array{kra: string, kra_weight: mixed, tasks: list<array<string, mixed>>}>
      */
     private function tasksSummaryForOfficerMonth(int $officerUserId, int $year, int $month): array
     {
-        $startDate = sprintf('%04d-%02d-01', $year, $month);
-        $endDate = date('Y-m-t', strtotime($startDate));
+        $monthStart = Carbon::create($year, $month, 1)->startOfDay();
+        $monthEnd = $monthStart->copy()->endOfMonth();
 
-        $tasks = Task::where('created_by', $officerUserId)
+        $tasks = Task::query()
+            ->select([
+                'id', 'kra', 'kra_weight', 'title', 'description', 'mfo', 'objective', 'movs',
+                'due_date', 'updated_at', 'created_at',
+            ])
+            ->where('created_by', $officerUserId)
             ->where('status', 'completed')
-            ->whereBetween(DB::raw('DATE(updated_at)'), [$startDate, $endDate])
+            ->whereBetween('updated_at', [$monthStart, $monthEnd])
             ->orderBy('kra')
             ->orderBy('created_at')
             ->get();
@@ -364,8 +325,14 @@ class AccomplishmentReportController extends Controller
         );
 
         return response()->streamDownload(function () use ($spreadsheet) {
-            $writer = new Xlsx($spreadsheet);
-            $writer->save('php://output');
+            try {
+                $writer = new Xlsx($spreadsheet);
+                $writer->setPreCalculateFormulas(false);
+                $writer->setUseDiskCaching(true, storage_path('framework/cache'));
+                $writer->save('php://output');
+            } finally {
+                $spreadsheet->disconnectWorksheets();
+            }
         }, $filename, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         ]);
