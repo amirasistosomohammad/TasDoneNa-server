@@ -7,6 +7,7 @@ use App\Models\SystemSetting;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class SettingsController extends Controller
@@ -49,7 +50,8 @@ class SettingsController extends Controller
         // Skip disk exists() here to keep GET /settings fast (logo endpoint still validates the file).
         if ($path !== null) {
             $ts = $s->updated_at ? $s->updated_at->getTimestamp() : time();
-            $logoUrl = '/api/settings/logo?v='.$ts;
+            // Absolute URL so <img src> works even when the SPA uses a different path prefix logic.
+            $logoUrl = URL::to('/api/settings/logo?v='.$ts);
         }
 
         return response()->json([

@@ -33,6 +33,8 @@ final class UserPublicMedia
             return $raw;
         }
 
+        // Must use absolute URLs: default `signed` middleware validates with $request->url(),
+        // which never matches a hash built from a relative path (breaks behind proxies/subpaths).
         return URL::temporarySignedRoute(
             'api.media.user-avatar',
             now()->addDays(30),
@@ -40,7 +42,7 @@ final class UserPublicMedia
                 'user' => $user->id,
                 'v' => (string) ($user->updated_at?->getTimestamp() ?? 0),
             ],
-            false
+            true
         );
     }
 
@@ -73,7 +75,7 @@ final class UserPublicMedia
                 'user' => $user->id,
                 'v' => (string) ($user->updated_at?->getTimestamp() ?? 0),
             ],
-            false
+            true
         );
     }
 
