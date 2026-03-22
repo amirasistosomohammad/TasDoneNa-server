@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Mail\OfficerApprovalMail;
 use App\Mail\OfficerDeactivationMail;
 use App\Mail\OfficerRejectionMail;
+use App\Models\ActivityLog;
 use App\Models\Task;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
@@ -51,12 +52,30 @@ class AdminController extends Controller
                 'school_name',
                 'status',
                 'is_active',
+                'avatar_url',
+                'profile_avatar_url',
+                'approval_remarks',
                 'deactivation_reason',
                 'rejection_reason',
+                'activation_remarks',
+                'approved_at',
+                'rejected_at',
+                'deactivated_at',
+                'activated_at',
                 'created_at',
+                'updated_at',
             ]);
 
-        $officers->each->makeVisible(['rejection_reason', 'deactivation_reason']);
+        $officers->each->makeVisible([
+            'rejection_reason',
+            'deactivation_reason',
+            'approval_remarks',
+            'activation_remarks',
+            'approved_at',
+            'rejected_at',
+            'deactivated_at',
+            'activated_at',
+        ]);
 
         return response()->json([
             'officers' => $officers,
@@ -89,12 +108,21 @@ class AdminController extends Controller
         $user->update([
             'is_active' => false,
             'deactivation_reason' => $validated['reason'] ?? null,
+            'deactivated_at' => now(),
         ]);
 
         Mail::to($user->email)->send(new OfficerDeactivationMail(
             name: $user->name,
             reason: $validated['reason'] ?? null,
         ));
+
+        ActivityLog::log(
+            'personnel_deactivated',
+            "Deactivated personnel: {$user->name} ({$user->email})",
+            $request->user()?->id,
+            $request->ip(),
+            ['user_id' => $user->id, 'reason' => $validated['reason'] ?? null]
+        );
 
         return response()->json([
             'message' => 'Officer account deactivated.',
@@ -107,6 +135,10 @@ class AdminController extends Controller
      */
     public function activateOfficer(Request $request, int $id): JsonResponse
     {
+        $validated = $request->validate([
+            'remarks' => ['nullable', 'string', 'max:1000'],
+        ]);
+
         $user = User::where('role', 'officer')->find($id);
 
         if (! $user) {
@@ -124,7 +156,18 @@ class AdminController extends Controller
         $user->update([
             'is_active' => true,
             'deactivation_reason' => null,
+            'deactivated_at' => null,
+            'activated_at' => now(),
+            'activation_remarks' => $validated['remarks'] ?? null,
         ]);
+
+        ActivityLog::log(
+            'personnel_activated',
+            "Activated personnel: {$user->name} ({$user->email})",
+            $request->user()?->id,
+            $request->ip(),
+            ['user_id' => $user->id]
+        );
 
         return response()->json([
             'message' => 'Officer account activated.',
@@ -150,6 +193,8 @@ class AdminController extends Controller
                 'division',
                 'school_name',
                 'status',
+                'avatar_url',
+                'profile_avatar_url',
                 'created_at',
             ]);
 
@@ -187,12 +232,22 @@ class AdminController extends Controller
             'rejection_reason' => null,
             'approval_remarks' => $validated['remarks'] ?? null,
             'deactivation_reason' => null,
+            'approved_at' => now(),
+            'rejected_at' => null,
         ]);
 
         Mail::to($user->email)->send(new OfficerApprovalMail(
             name: $user->name,
             remarks: $validated['remarks'] ?? null,
         ));
+
+        ActivityLog::log(
+            'personnel_approved',
+            "Approved personnel: {$user->name} ({$user->email})",
+            $request->user()?->id,
+            $request->ip(),
+            ['user_id' => $user->id]
+        );
 
         return response()->json([
             'message' => 'User approved successfully.',
@@ -226,12 +281,22 @@ class AdminController extends Controller
         $user->update([
             'status' => 'rejected',
             'rejection_reason' => $validated['reason'] ?? null,
+            'rejected_at' => now(),
+            'approved_at' => null,
         ]);
 
         Mail::to($user->email)->send(new OfficerRejectionMail(
             name: $user->name,
             reason: $validated['reason'] ?? null,
         ));
+
+        ActivityLog::log(
+            'personnel_rejected',
+            "Rejected personnel: {$user->name} ({$user->email})",
+            $request->user()?->id,
+            $request->ip(),
+            ['user_id' => $user->id, 'reason' => $validated['reason'] ?? null]
+        );
 
         return response()->json([
             'message' => 'User rejected.',
@@ -253,22 +318,27 @@ class AdminController extends Controller
             ]);
         }
 
-        if ($user->status !== 'rejected') {
-            return response()->json([
-                'message' => 'Only rejected personnel with no activity can be removed.',
-            ], 422);
-        }
-
+        // Check for tasks/activity - personnel with activity cannot be deleted
         $hasAssignedTasks = Task::where('assigned_to', $user->id)->exists();
         $hasCreatedTasks = Task::where('created_by', $user->id)->exists();
 
         if ($hasAssignedTasks || $hasCreatedTasks) {
             return response()->json([
-                'message' => 'This personnel has activity in the system (tasks assigned or created) and cannot be removed.',
+                'message' => 'This personnel has activity in the system (tasks assigned or created) and cannot be removed. Please deactivate the account instead.',
             ], 422);
         }
 
+        $name = $user->name;
+        $email = $user->email;
         $user->delete();
+
+        ActivityLog::log(
+            'personnel_deleted',
+            "Removed personnel from directory: {$name} ({$email})",
+            $request->user()?->id,
+            $request->ip(),
+            ['user_id' => $id]
+        );
 
         return response()->json([
             'message' => 'Personnel removed from directory.',

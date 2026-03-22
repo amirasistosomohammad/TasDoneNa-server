@@ -27,6 +27,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             PendingOfficersSeeder::class,
             PersonnelDirectorySeeder::class,
+            MyTasksSeeder::class,
         ]);
     }
 }

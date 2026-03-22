@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Mail\OtpMail;
 use App\Mail\ResetPasswordMail;
+use App\Models\ActivityLog;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -43,38 +44,59 @@ class AuthController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'email', 'max:255'],
             'password' => ['required', 'confirmed', Password::defaults()],
-            'employee_id' => ['required', 'string', 'max:100'],
+            'employee_id' => ['nullable', 'string', 'max:100'],
             'position' => ['required', 'string', 'max:255'],
             'division' => ['required', 'string', 'max:255'],
             'school_name' => ['required', 'string', 'max:255'],
         ]);
 
-        $existing = User::where('email', $validated['email'])->first();
+        // Check for existing user (including soft-deleted)
+        $existing = User::withTrashed()->where('email', $validated['email'])->first();
 
-        if ($existing && $existing->email_verified_at) {
+        if ($existing && $existing->email_verified_at && !$existing->trashed()) {
             throw ValidationException::withMessages([
                 'email' => ['This email is already registered. Please sign in.'],
             ]);
         }
 
-        if ($existing && ! $existing->email_verified_at) {
+        // Handle soft-deleted (rejected) user trying to register again
+        if ($existing && $existing->trashed()) {
+            // Restore the soft-deleted user and update with new registration data
+            $existing->restore();
             $existing->update([
                 'name' => $validated['name'],
                 'password' => $validated['password'],
-                'employee_id' => $validated['employee_id'],
+                'employee_id' => $validated['employee_id'] ?? null,
+                'position' => $validated['position'],
+                'division' => $validated['division'],
+                'school_name' => $validated['school_name'],
+                'status' => 'pending', // Reset to pending for admin review
+                'email_verified_at' => null, // Reset email verification
+                'rejection_reason' => null, // Clear previous rejection reason
+                'otp' => null, // Clear old OTP
+                'otp_expires_at' => null,
+            ]);
+            $user = $existing;
+        } elseif ($existing && ! $existing->email_verified_at) {
+            // Existing unverified user - update their info
+            $existing->update([
+                'name' => $validated['name'],
+                'password' => $validated['password'],
+                'employee_id' => $validated['employee_id'] ?? null,
                 'position' => $validated['position'],
                 'division' => $validated['division'],
                 'school_name' => $validated['school_name'],
             ]);
             $user = $existing;
         } else {
+            // New user - create fresh record
             $user = User::create([
                 'name' => $validated['name'],
                 'email' => $validated['email'],
                 'password' => $validated['password'],
                 'role' => 'officer',
                 'status' => 'pending',
-                'employee_id' => $validated['employee_id'],
+                'employee_id' => $validated['employee_id'] ?? null,
                 'position' => $validated['position'],
                 'division' => $validated['division'],
                 'school_name' => $validated['school_name'],
@@ -303,11 +325,23 @@ class AuthController extends Controller
         $user->tokens()->where('name', 'auth')->delete();
         $token = $user->createToken('auth')->plainTextToken;
 
+        ActivityLog::log(
+            'user_login',
+            "User signed in: {$user->name} ({$user->email})",
+            $user->id,
+            $request->ip()
+        );
+
+        $avatarUrl = $user->profile_avatar_url ?? $user->avatar_url;
+        $userData = $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']);
+        $userData['avatar_url'] = $avatarUrl;
+        $userData['school_logo_url'] = $user->school_logo_url ?? null;
+
         return response()->json([
             'message' => 'Login successful.',
             'token' => $token,
             'token_type' => 'Bearer',
-            'user' => $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']),
+            'user' => $userData,
         ]);
     }
 
@@ -346,8 +380,39 @@ class AuthController extends Controller
             ], 403);
         }
 
+        $avatarUrl = $user->profile_avatar_url ?? $user->avatar_url;
+        $userData = $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']);
+        $userData['avatar_url'] = $avatarUrl;
+        $userData['school_logo_url'] = $user->school_logo_url ?? null;
+
         return response()->json([
-            'user' => $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']),
+            'user' => $userData,
+        ]);
+    }
+
+    /**
+     * Update password for authenticated user.
+     */
+    public function updatePassword(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'current_password' => ['required', 'string'],
+            'new_password' => ['required', 'confirmed', Password::defaults()],
+            'new_password_confirmation' => ['required', 'string'],
+        ]);
+
+        $user = $request->user();
+
+        if (!Hash::check($validated['current_password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'current_password' => ['The current password is incorrect.'],
+            ]);
+        }
+
+        $user->update(['password' => $validated['new_password']]);
+
+        return response()->json([
+            'message' => 'Password updated successfully.',
         ]);
     }
 }
