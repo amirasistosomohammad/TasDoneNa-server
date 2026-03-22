@@ -7,6 +7,7 @@ use App\Models\SystemSetting;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class SettingsController extends Controller
 {
@@ -21,18 +22,31 @@ class SettingsController extends Controller
     }
 
     /**
-     * Build logo URL so it works in deployment.
+     * Sanitize stored logo path (relative to the public disk root).
+     */
+    private function safeLogoPath(?string $logoPath): ?string
+    {
+        if (! $logoPath) {
+            return null;
+        }
+        $path = ltrim(str_replace(['../', '..\\'], '', $logoPath), '/');
+        if ($path === '' || str_contains($path, '..')) {
+            return null;
+        }
+
+        return $path;
+    }
+
+    /**
+     * Build logo URL for JSON. Use API route so <img src> hits PHP and avoids 403 when
+     * /storage is not exposed (e.g. some reverse proxies / App Platform layouts).
      */
     private function settingsResponse(SystemSetting $s): JsonResponse
     {
         $logoUrl = null;
-        if ($s->logo_path) {
-            $path = ltrim(str_replace(['../', '..\\'], '', $s->logo_path), '/');
-            if ($path !== '' && !str_contains($path, '..')) {
-                // Storage::url() returns a path like /storage/path/to/file
-                // We'll return it as-is and let the frontend handle the base URL
-                $logoUrl = Storage::url($path);
-            }
+        $path = $this->safeLogoPath($s->logo_path);
+        if ($path !== null && Storage::disk('public')->exists($path)) {
+            $logoUrl = '/api/settings/logo';
         }
 
         return response()->json([
@@ -40,6 +54,21 @@ class SettingsController extends Controller
             'logo_url' => $logoUrl,
             'tagline' => $s->tagline,
         ]);
+    }
+
+    /**
+     * GET /api/settings/logo — stream the current system logo (public, same as metadata).
+     * Uses response()->file() so static analysis sees a known API (Filesystem contract has no response()).
+     */
+    public function logo(): BinaryFileResponse
+    {
+        $s = SystemSetting::get();
+        $path = $this->safeLogoPath($s->logo_path);
+        if ($path === null || ! Storage::disk('public')->exists($path)) {
+            abort(404);
+        }
+
+        return response()->file(Storage::disk('public')->path($path));
     }
 
     /**
@@ -81,7 +110,8 @@ class SettingsController extends Controller
         $this->ensureAdmin($request);
 
         $request->validate([
-            'logo' => ['required', 'image', 'mimes:jpeg,jpg,png,gif,webp,svg', 'max:2048'],
+            // Use `file` not `image` — `image` rejects SVG, which we allow in mimes.
+            'logo' => ['required', 'file', 'mimes:jpeg,jpg,png,gif,webp,svg', 'max:2048'],
         ]);
 
         $s = SystemSetting::get();

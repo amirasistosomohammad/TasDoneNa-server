@@ -21,6 +21,8 @@ Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
 // Public settings (for app name, logo - used in login/layout)
+// Logo image is served via API so deployments work without a working /storage symlink or static file route.
+Route::get('/settings/logo', [SettingsController::class, 'logo']);
 Route::get('/settings', [SettingsController::class, 'index']);
 
 // Protected (auth:sanctum)
