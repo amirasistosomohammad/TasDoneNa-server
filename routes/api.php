@@ -1,16 +1,16 @@
 <?php
 
+use App\Http\Controllers\Api\AccomplishmentReportController;
+use App\Http\Controllers\Api\ActivityLogController;
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\TaskController;
-use App\Http\Controllers\Api\AccomplishmentReportController;
-use App\Http\Controllers\Api\SettingsController;
-use App\Http\Controllers\Api\ActivityLogController;
 use App\Http\Controllers\Api\BackupController;
-use App\Http\Controllers\Api\MonitorOfficersController;
-use App\Http\Controllers\Api\UserProfileController;
-use App\Http\Controllers\Api\PublicUserMediaController;
 use App\Http\Controllers\Api\FilesArchiveController;
+use App\Http\Controllers\Api\MonitorOfficersController;
+use App\Http\Controllers\Api\PublicUserMediaController;
+use App\Http\Controllers\Api\SettingsController;
+use App\Http\Controllers\Api\TaskController;
+use App\Http\Controllers\Api\UserProfileController;
 use Illuminate\Support\Facades\Route;
 
 // Public
@@ -62,8 +62,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Accomplishment Reports (Phase 3.1, 3.2)
         Route::get('/accomplishment-reports', [AccomplishmentReportController::class, 'index']);
+        Route::post('/accomplishment-reports/export', [AccomplishmentReportController::class, 'exportFromPeriod']);
         Route::post('/accomplishment-reports', [AccomplishmentReportController::class, 'store']);
         Route::get('/accomplishment-reports/{id}', [AccomplishmentReportController::class, 'show']);
+        Route::get('/accomplishment-reports/{id}/export', [AccomplishmentReportController::class, 'export']);
         Route::put('/accomplishment-reports/{id}', [AccomplishmentReportController::class, 'update']);
     });
 
@@ -89,6 +91,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Accomplishment Reports (Phase 3.1, 3.3, 3.4)
         Route::get('/accomplishment-reports', [AccomplishmentReportController::class, 'index']);
         Route::get('/accomplishment-reports/{id}', [AccomplishmentReportController::class, 'show']);
+        Route::get('/accomplishment-reports/{id}/export', [AccomplishmentReportController::class, 'export']);
         Route::post('/accomplishment-reports/{id}/note', [AccomplishmentReportController::class, 'note']);
 
         // System Settings (admin only)
