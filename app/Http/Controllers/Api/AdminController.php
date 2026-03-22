@@ -9,6 +9,7 @@ use App\Mail\OfficerRejectionMail;
 use App\Models\ActivityLog;
 use App\Models\Task;
 use App\Models\User;
+use App\Support\UserPublicMedia;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
@@ -77,8 +78,21 @@ class AdminController extends Controller
             'activated_at',
         ]);
 
+        $keys = [
+            'id', 'name', 'email', 'employee_id', 'position', 'division', 'school_name',
+            'status', 'is_active', 'avatar_url', 'profile_avatar_url', 'approval_remarks',
+            'deactivation_reason', 'rejection_reason', 'activation_remarks', 'approved_at',
+            'rejected_at', 'deactivated_at', 'activated_at', 'created_at', 'updated_at',
+        ];
+
         return response()->json([
-            'officers' => $officers,
+            'officers' => $officers->map(function (User $officer) use ($keys) {
+                $row = $officer->only($keys);
+                $row['avatar_url'] = UserPublicMedia::avatarUrlForClient($officer);
+                $row['profile_avatar_url'] = UserPublicMedia::avatarUrlForClient($officer);
+
+                return $row;
+            }),
         ]);
     }
 
@@ -196,10 +210,20 @@ class AdminController extends Controller
                 'avatar_url',
                 'profile_avatar_url',
                 'created_at',
+                'updated_at',
             ]);
 
         return response()->json([
-            'users' => $users,
+            'users' => $users->map(function (User $u) {
+                $row = $u->only([
+                    'id', 'name', 'email', 'employee_id', 'position', 'division', 'school_name',
+                    'status', 'avatar_url', 'profile_avatar_url', 'created_at',
+                ]);
+                $row['avatar_url'] = UserPublicMedia::avatarUrlForClient($u);
+                $row['profile_avatar_url'] = UserPublicMedia::avatarUrlForClient($u);
+
+                return $row;
+            }),
         ]);
     }
 

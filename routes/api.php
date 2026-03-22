@@ -25,6 +25,14 @@ Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 Route::get('/settings/logo', [SettingsController::class, 'logo']);
 Route::get('/settings', [SettingsController::class, 'index']);
 
+// User media (signed URLs — works without exposing /storage/ to the web server)
+Route::get('/media/avatar/{user}', [UserProfileController::class, 'showAvatar'])
+    ->name('api.media.user-avatar')
+    ->middleware('signed');
+Route::get('/media/school-logo/{user}', [UserProfileController::class, 'showSchoolLogo'])
+    ->name('api.media.user-school-logo')
+    ->middleware('signed');
+
 // Protected (auth:sanctum)
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);

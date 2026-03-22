@@ -7,6 +7,7 @@ use App\Mail\OtpMail;
 use App\Mail\ResetPasswordMail;
 use App\Models\ActivityLog;
 use App\Models\User;
+use App\Support\UserPublicMedia;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -332,10 +333,9 @@ class AuthController extends Controller
             $request->ip()
         );
 
-        $avatarUrl = $user->profile_avatar_url ?? $user->avatar_url;
         $userData = $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']);
-        $userData['avatar_url'] = $avatarUrl;
-        $userData['school_logo_url'] = $user->school_logo_url ?? null;
+        $userData['avatar_url'] = UserPublicMedia::avatarUrlForClient($user);
+        $userData['school_logo_url'] = UserPublicMedia::schoolLogoUrlForClient($user);
 
         return response()->json([
             'message' => 'Login successful.',
@@ -380,10 +380,9 @@ class AuthController extends Controller
             ], 403);
         }
 
-        $avatarUrl = $user->profile_avatar_url ?? $user->avatar_url;
         $userData = $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']);
-        $userData['avatar_url'] = $avatarUrl;
-        $userData['school_logo_url'] = $user->school_logo_url ?? null;
+        $userData['avatar_url'] = UserPublicMedia::avatarUrlForClient($user);
+        $userData['school_logo_url'] = UserPublicMedia::schoolLogoUrlForClient($user);
 
         return response()->json([
             'user' => $userData,

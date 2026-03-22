@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Task;
 use App\Models\User;
+use App\Support\UserPublicMedia;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 
@@ -32,6 +33,7 @@ class MonitorOfficersController extends Controller
                 'school_name',
                 'avatar_url',
                 'profile_avatar_url',
+                'updated_at',
             ]);
 
         $tasksByOfficer = Task::whereIn('assigned_to', $officers->pluck('id'))
@@ -69,8 +71,8 @@ class MonitorOfficersController extends Controller
                 'position' => $officer->position,
                 'division' => $officer->division,
                 'school_name' => $officer->school_name,
-                'avatar_url' => $officer->avatar_url,
-                'profile_avatar_url' => $officer->profile_avatar_url,
+                'avatar_url' => UserPublicMedia::avatarUrlForClient($officer),
+                'profile_avatar_url' => UserPublicMedia::avatarUrlForClient($officer),
                 'pending_count' => count($pending),
                 'missing_count' => count($missing),
                 'completed_count' => count($completed),
