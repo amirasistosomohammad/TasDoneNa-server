@@ -333,6 +333,8 @@ class AuthController extends Controller
             $request->ip()
         );
 
+        $user->ensurePublicMediaTokens();
+
         $userData = $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']);
         $userData['avatar_url'] = UserPublicMedia::avatarUrlForClient($user);
         $userData['school_logo_url'] = UserPublicMedia::schoolLogoUrlForClient($user);
@@ -379,6 +381,8 @@ class AuthController extends Controller
                 'status' => 'deactivated',
             ], 403);
         }
+
+        $user->ensurePublicMediaTokens();
 
         $userData = $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']);
         $userData['avatar_url'] = UserPublicMedia::avatarUrlForClient($user);

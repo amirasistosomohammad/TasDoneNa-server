@@ -33,6 +33,9 @@ class MonitorOfficersController extends Controller
                 'school_name',
                 'avatar_url',
                 'profile_avatar_url',
+                'avatar_public_token',
+                'school_logo_public_token',
+                'school_logo_url',
                 'updated_at',
             ]);
 
@@ -73,6 +76,7 @@ class MonitorOfficersController extends Controller
                 'school_name' => $officer->school_name,
                 'avatar_url' => UserPublicMedia::avatarUrlForClient($officer),
                 'profile_avatar_url' => UserPublicMedia::avatarUrlForClient($officer),
+                'school_logo_url' => UserPublicMedia::schoolLogoUrlForClient($officer),
                 'pending_count' => count($pending),
                 'missing_count' => count($missing),
                 'completed_count' => count($completed),

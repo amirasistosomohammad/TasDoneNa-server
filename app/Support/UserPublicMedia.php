@@ -3,17 +3,13 @@
 namespace App\Support;
 
 use App\Models\User;
-use Illuminate\Support\Facades\URL;
 
 /**
- * Build browser-safe URLs for user avatars / school logos stored on the public disk.
- * Direct /storage/... links often 403 on App Platform; signed /api/media/... routes stream via PHP.
+ * Build browser-safe URLs for user avatars / school logos on the public disk.
+ * Uses opaque tokens + GET /api/public/... (no signed URLs, no /storage/ exposure).
  */
 final class UserPublicMedia
 {
-    /**
-     * Signed relative URL for profile photo, or external http(s) URL, or null.
-     */
     public static function avatarUrlForClient(?User $user): ?string
     {
         if ($user === null) {
@@ -33,22 +29,15 @@ final class UserPublicMedia
             return $raw;
         }
 
-        // Must use absolute URLs: default `signed` middleware validates with $request->url(),
-        // which never matches a hash built from a relative path (breaks behind proxies/subpaths).
-        return URL::temporarySignedRoute(
-            'api.media.user-avatar',
-            now()->addDays(30),
-            [
-                'user' => $user->id,
-                'v' => (string) ($user->updated_at?->getTimestamp() ?? 0),
-            ],
-            true
-        );
+        if (! $user->avatar_public_token) {
+            return null;
+        }
+
+        $v = (string) ($user->updated_at?->getTimestamp() ?? 0);
+
+        return '/api/public/avatar/'.$user->avatar_public_token.'?v='.$v;
     }
 
-    /**
-     * Signed relative URL for school logo, or external http(s) URL, or null.
-     */
     public static function schoolLogoUrlForClient(?User $user): ?string
     {
         if ($user === null) {
@@ -68,15 +57,13 @@ final class UserPublicMedia
             return $raw;
         }
 
-        return URL::temporarySignedRoute(
-            'api.media.user-school-logo',
-            now()->addDays(30),
-            [
-                'user' => $user->id,
-                'v' => (string) ($user->updated_at?->getTimestamp() ?? 0),
-            ],
-            true
-        );
+        if (! $user->school_logo_public_token) {
+            return null;
+        }
+
+        $v = (string) ($user->updated_at?->getTimestamp() ?? 0);
+
+        return '/api/public/school-logo/'.$user->school_logo_public_token.'?v='.$v;
     }
 
     public static function storageRelativePathFromPublicUrl(?string $url): ?string

@@ -8,7 +8,7 @@ use App\Support\UserPublicMedia;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Illuminate\Support\Str;
 
 class UserProfileController extends Controller
 {
@@ -47,7 +47,7 @@ class UserProfileController extends Controller
     public function uploadAvatar(Request $request): JsonResponse
     {
         $request->validate([
-            'avatar' => ['required', 'image', 'mimes:jpeg,jpg,png,gif,webp', 'max:2048'],
+            'avatar' => ['required', 'file', 'mimes:jpeg,jpg,png,gif,webp', 'max:2048'],
         ]);
 
         $user = $request->user();
@@ -61,7 +61,10 @@ class UserProfileController extends Controller
 
         $path = $request->file('avatar')->store('avatars', 'public');
         $url = Storage::url($path);
-        $user->update(['profile_avatar_url' => $url]);
+        $user->update([
+            'profile_avatar_url' => $url,
+            'avatar_public_token' => Str::random(48),
+        ]);
 
         $user->refresh();
 
@@ -72,53 +75,12 @@ class UserProfileController extends Controller
     }
 
     /**
-     * GET /api/media/avatar/{user} — stream avatar (signed URL, for <img src> without Bearer token).
-     */
-    public function showAvatar(Request $request, User $user): BinaryFileResponse
-    {
-        $expectedV = (string) ($user->updated_at?->getTimestamp() ?? 0);
-        if ($request->query('v') !== $expectedV) {
-            abort(404);
-        }
-
-        $raw = $user->profile_avatar_url ?? $user->avatar_url;
-        $path = UserPublicMedia::storageRelativePathFromPublicUrl($raw);
-        if ($path === null || ! Storage::disk('public')->exists($path)) {
-            abort(404);
-        }
-
-        return response()->file(Storage::disk('public')->path($path));
-    }
-
-    /**
-     * GET /api/media/school-logo/{user} — stream school logo (signed URL).
-     */
-    public function showSchoolLogo(Request $request, User $user): BinaryFileResponse
-    {
-        if ($user->role !== 'officer' && $user->role !== 'admin') {
-            abort(404);
-        }
-
-        $expectedV = (string) ($user->updated_at?->getTimestamp() ?? 0);
-        if ($request->query('v') !== $expectedV) {
-            abort(404);
-        }
-
-        $path = UserPublicMedia::storageRelativePathFromPublicUrl($user->school_logo_url);
-        if ($path === null || ! Storage::disk('public')->exists($path)) {
-            abort(404);
-        }
-
-        return response()->file(Storage::disk('public')->path($path));
-    }
-
-    /**
      * POST /api/user/school-logo — upload school logo (officers only).
      */
     public function uploadSchoolLogo(Request $request): JsonResponse
     {
         $request->validate([
-            'school_logo' => ['required', 'image', 'mimes:jpeg,jpg,png,gif,webp', 'max:2048'],
+            'school_logo' => ['required', 'file', 'mimes:jpeg,jpg,png,gif,webp', 'max:2048'],
         ]);
 
         $user = $request->user();
@@ -135,7 +97,10 @@ class UserProfileController extends Controller
 
         $path = $request->file('school_logo')->store('school-logos', 'public');
         $url = Storage::url($path);
-        $user->update(['school_logo_url' => $url]);
+        $user->update([
+            'school_logo_url' => $url,
+            'school_logo_public_token' => Str::random(48),
+        ]);
         $user->refresh();
 
         return response()->json([
@@ -151,6 +116,8 @@ class UserProfileController extends Controller
 
     private function userResponse(User $user): array
     {
+        $user->ensurePublicMediaTokens();
+
         return $user->only([
             'id',
             'name',

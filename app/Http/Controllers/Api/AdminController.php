@@ -55,6 +55,9 @@ class AdminController extends Controller
                 'is_active',
                 'avatar_url',
                 'profile_avatar_url',
+                'school_logo_url',
+                'avatar_public_token',
+                'school_logo_public_token',
                 'approval_remarks',
                 'deactivation_reason',
                 'rejection_reason',
@@ -80,16 +83,18 @@ class AdminController extends Controller
 
         $keys = [
             'id', 'name', 'email', 'employee_id', 'position', 'division', 'school_name',
-            'status', 'is_active', 'avatar_url', 'profile_avatar_url', 'approval_remarks',
+            'status', 'is_active', 'avatar_url', 'profile_avatar_url', 'school_logo_url', 'approval_remarks',
             'deactivation_reason', 'rejection_reason', 'activation_remarks', 'approved_at',
             'rejected_at', 'deactivated_at', 'activated_at', 'created_at', 'updated_at',
         ];
 
         return response()->json([
             'officers' => $officers->map(function (User $officer) use ($keys) {
+                $officer->ensurePublicMediaTokens();
                 $row = $officer->only($keys);
                 $row['avatar_url'] = UserPublicMedia::avatarUrlForClient($officer);
                 $row['profile_avatar_url'] = UserPublicMedia::avatarUrlForClient($officer);
+                $row['school_logo_url'] = UserPublicMedia::schoolLogoUrlForClient($officer);
 
                 return $row;
             }),
@@ -209,18 +214,23 @@ class AdminController extends Controller
                 'status',
                 'avatar_url',
                 'profile_avatar_url',
+                'school_logo_url',
+                'avatar_public_token',
+                'school_logo_public_token',
                 'created_at',
                 'updated_at',
             ]);
 
         return response()->json([
             'users' => $users->map(function (User $u) {
+                $u->ensurePublicMediaTokens();
                 $row = $u->only([
                     'id', 'name', 'email', 'employee_id', 'position', 'division', 'school_name',
-                    'status', 'avatar_url', 'profile_avatar_url', 'created_at',
+                    'status', 'avatar_url', 'profile_avatar_url', 'school_logo_url', 'created_at',
                 ]);
                 $row['avatar_url'] = UserPublicMedia::avatarUrlForClient($u);
                 $row['profile_avatar_url'] = UserPublicMedia::avatarUrlForClient($u);
+                $row['school_logo_url'] = UserPublicMedia::schoolLogoUrlForClient($u);
 
                 return $row;
             }),
