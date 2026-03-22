@@ -45,8 +45,11 @@ class SettingsController extends Controller
     {
         $logoUrl = null;
         $path = $this->safeLogoPath($s->logo_path);
-        if ($path !== null && Storage::disk('public')->exists($path)) {
-            $logoUrl = '/api/settings/logo';
+        // `v` busts browser/CDN cache when the row (or logo file) changes; same path was keeping stale images.
+        // Skip disk exists() here to keep GET /settings fast (logo endpoint still validates the file).
+        if ($path !== null) {
+            $ts = $s->updated_at ? $s->updated_at->getTimestamp() : time();
+            $logoUrl = '/api/settings/logo?v='.$ts;
         }
 
         return response()->json([
