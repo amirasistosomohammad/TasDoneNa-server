@@ -57,4 +57,14 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
-"# TasDoneNa-server" 
+
+---
+
+## TasDoneNa — deployment notes (DigitalOcean App Platform)
+
+If the browser shows **502 / 504 Gateway Timeout** on API calls (create task, `/user`, `/files-archive`, etc.):
+
+1. **Keep the API component “awake”** — avoid scaling web/workers to zero on idle if your plan allows; cold starts often exceed the default proxy timeout.
+2. **Raise ingress / proxy timeouts** in the App Platform spec (or load balancer) so long-running requests (uploads, first DB connection after idle) can complete.
+3. **Database region** — run the app and managed DB in the same region to avoid slow cross-region latency on every request.
+4. Run **`php artisan migrate`** after deploy; use a **persistent volume** for `storage/` if you rely on local file storage.

@@ -14,7 +14,23 @@ class FilesArchiveController extends Controller
     {
         $userId = $request->user()->id;
 
-        $query = TaskFile::query()
+        // Base scope: reuse for stats (SQL aggregates) + list query — avoids loading all rows twice.
+        $base = TaskFile::query()
+            ->join('tasks', 'tasks.id', '=', 'task_files.task_id')
+            ->where(function ($q) use ($userId) {
+                $q->where('task_files.user_id', $userId)
+                    ->orWhere('tasks.created_by', $userId)
+                    ->orWhere('tasks.assigned_to', $userId);
+            });
+
+        $stats = [
+            'total' => (clone $base)->count(),
+            'archived' => (clone $base)->whereNotNull('task_files.archived_at')->count(),
+            'active' => (clone $base)->whereNull('task_files.archived_at')->count(),
+            'total_size' => (int) ((clone $base)->sum('task_files.file_size') ?? 0),
+        ];
+
+        $files = (clone $base)
             ->select([
                 'task_files.*',
                 'tasks.title as task_title',
@@ -23,27 +39,9 @@ class FilesArchiveController extends Controller
                 'tasks.created_by as task_created_by',
                 'tasks.assigned_to as task_assigned_to',
             ])
-            ->join('tasks', 'tasks.id', '=', 'task_files.task_id')
-            ->where(function ($q) use ($userId) {
-                // Include files the officer uploaded anywhere,
-                // plus files attached to tasks the officer owns/was assigned.
-                $q->where('task_files.user_id', $userId)
-                    ->orWhere('tasks.created_by', $userId)
-                    ->orWhere('tasks.assigned_to', $userId);
-            })
             ->orderByDesc('task_files.uploaded_at')
-            ->orderBy('task_files.id', 'desc');
-
-        $files = $query->get();
-
-        $stats = [
-            'total' => $files->count(),
-            'archived' => $files->whereNotNull('archived_at')->count(),
-            'active' => $files->whereNull('archived_at')->count(),
-            'total_size' => (int) $files->sum(function ($f) {
-                return (int) ($f->file_size ?? 0);
-            }),
-        ];
+            ->orderByDesc('task_files.id')
+            ->get();
 
         return response()->json([
             'files' => $files,
