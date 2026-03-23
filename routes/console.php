@@ -6,7 +6,6 @@ use App\Services\AccomplishmentReportDataService;
 use App\Services\AccomplishmentReportExcelExportService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
@@ -15,33 +14,57 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Artisan::command('accomplishment:generate-export {userId} {token}', function (string $userId, string $token): void {
-    $cacheKey = 'accomplishment_export:'.$userId.':'.$token;
-    $data = Cache::get($cacheKey);
     $ttlSeconds = (int) config('accomplishment_report_export.export_cache_ttl_seconds', 900);
+    $exportDir = storage_path('app/temp/accomplishment_exports');
+    $statusDir = $exportDir.'/status';
+    $statusPath = $statusDir.'/'.$userId.'_'.$token.'.json';
+    $exportPath = $exportDir.'/'.$userId.'_'.$token.'.xlsx';
 
-    if (! is_array($data) || ($data['state'] ?? '') === '') {
-        $this->warn('Export token not found in cache: '.$token);
-
-        return;
-    }
-
-    if (($data['state'] ?? '') !== 'pending' && ($data['state'] ?? '') !== 'processing') {
-        $this->warn('Export token not pending/processing: '.$token);
+    if (! is_readable($statusPath)) {
+        $this->warn('Export status file not found: '.$statusPath);
 
         return;
     }
 
-    $payload = $data['payload'] ?? null;
+    $status = json_decode((string) file_get_contents($statusPath), true);
+    if (! is_array($status)) {
+        $this->warn('Export status file unreadable: '.$statusPath);
+
+        return;
+    }
+
+    $expiresAt = $status['expires_at'] ?? now()->addSeconds($ttlSeconds)->timestamp;
+    $payload = $status['payload'] ?? null;
     if (! is_array($payload)) {
-        Cache::put($cacheKey, [
+        $tmp = $statusPath.'.tmp';
+        file_put_contents($tmp, json_encode([
             'state' => 'failed',
+            'expires_at' => $expiresAt,
             'message' => 'Missing export payload.',
-        ], now()->addSeconds($ttlSeconds));
+        ], JSON_UNESCAPED_UNICODE));
+        @rename($tmp, $statusPath);
 
         return;
     }
 
-    Cache::put($cacheKey, array_merge($data, ['state' => 'processing']), now()->addSeconds($ttlSeconds));
+    $statusWrite = function (array $update) use ($statusPath, $expiresAt): void {
+        $tmp = $statusPath.'.tmp';
+        $existing = [];
+        if (is_readable($statusPath)) {
+            $existing = json_decode((string) file_get_contents($statusPath), true) ?? [];
+        }
+        if (! is_array($existing)) {
+            $existing = [];
+        }
+        $existing['expires_at'] = $expiresAt;
+        foreach ($update as $k => $v) {
+            $existing[$k] = $v;
+        }
+        file_put_contents($tmp, json_encode($existing, JSON_UNESCAPED_UNICODE));
+        @rename($tmp, $statusPath);
+    };
+
+    $statusWrite(['state' => 'processing']);
 
     try {
         $year = (int) ($payload['year'] ?? 0);
@@ -54,10 +77,7 @@ Artisan::command('accomplishment:generate-export {userId} {token}', function (st
             ->find((int) $userId);
 
         if (! $officer) {
-            Cache::put($cacheKey, [
-                'state' => 'failed',
-                'message' => 'User not found.',
-            ], now()->addSeconds($ttlSeconds));
+            $statusWrite(['state' => 'failed', 'message' => 'User not found.']);
 
             return;
         }
@@ -66,10 +86,10 @@ Artisan::command('accomplishment:generate-export {userId} {token}', function (st
         $excelService = app(AccomplishmentReportExcelExportService::class);
 
         if (! $excelService->templateExists()) {
-            Cache::put($cacheKey, [
+            $statusWrite([
                 'state' => 'failed',
                 'message' => 'Excel template is missing or not readable on the server.',
-            ], now()->addSeconds($ttlSeconds));
+            ]);
 
             return;
         }
@@ -85,16 +105,15 @@ Artisan::command('accomplishment:generate-export {userId} {token}', function (st
 
         $spreadsheet = $excelService->fill($report, $schoolHeadName, $schoolHeadDesignation);
 
-        $dir = storage_path('app/temp/accomplishment_exports');
+        $dir = $exportDir;
         if (! is_dir($dir)) {
             mkdir($dir, 0755, true);
         }
 
-        $path = $dir.'/'.$userId.'_'.$token.'.xlsx';
         $writer = new Xlsx($spreadsheet);
         $writer->setPreCalculateFormulas(false);
         $writer->setUseDiskCaching(true, storage_path('framework/cache'));
-        $writer->save($path);
+        $writer->save($exportPath);
         $spreadsheet->disconnectWorksheets();
         unset($spreadsheet, $writer);
 
@@ -106,16 +125,16 @@ Artisan::command('accomplishment:generate-export {userId} {token}', function (st
             substr($slug, 0, 80)
         );
 
-        Cache::put($cacheKey, [
+        $statusWrite([
             'state' => 'ready',
-            'path' => $path,
+            'path' => $exportPath,
             'filename' => $filename,
-        ], now()->addSeconds($ttlSeconds));
+        ]);
     } catch (\Throwable $e) {
         report($e);
-        Cache::put($cacheKey, [
+        $statusWrite([
             'state' => 'failed',
             'message' => 'Failed to build the Excel file.',
-        ], now()->addSeconds($ttlSeconds));
+        ]);
     }
 })->purpose('Generate accomplishment report export XLSX in background');
