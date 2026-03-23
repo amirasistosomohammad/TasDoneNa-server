@@ -95,10 +95,10 @@ class AccomplishmentReportController extends Controller
     }
 
     /**
-     * Officer: queue Excel build after the HTTP response (avoids reverse-proxy 504 on slow hosts).
-     * Client polls exportFromPeriodStatus then downloads exportFromPeriodDownload.
+     * Officer: deployment-safe fallback export.
+     * Returns the raw Excel template directly (fast path, no heavy generation).
      */
-    public function exportFromPeriod(Request $request, AccomplishmentReportExcelExportService $excel): JsonResponse
+    public function exportFromPeriod(Request $request, AccomplishmentReportExcelExportService $excel): JsonResponse|BinaryFileResponse
     {
         $auth = $request->user();
         if ($auth->role !== 'officer') {
@@ -126,69 +126,17 @@ class AccomplishmentReportController extends Controller
             ], 503);
         }
 
-        $userId = $auth->id;
-        $token = Str::random(48);
-        $ttlSeconds = (int) config('accomplishment_report_export.export_cache_ttl_seconds', 900);
-        $payload = $validated;
+        $templatePath = $excel->templatePath();
+        $filename = sprintf(
+            'Accomplishment_Report_Template_%04d-%02d.xlsx',
+            (int) $validated['year'],
+            (int) $validated['month']
+        );
 
-        $exportDir = storage_path('app/temp/accomplishment_exports');
-        $statusDir = $exportDir.'/status';
-        if (! is_dir($exportDir)) {
-            mkdir($exportDir, 0755, true);
-        }
-        if (! is_dir($statusDir)) {
-            mkdir($statusDir, 0755, true);
-        }
-
-        $statusPath = $statusDir.'/'.$userId.'_'.$token.'.json';
-        $exportPath = $exportDir.'/'.$userId.'_'.$token.'.xlsx';
-        $expiresAt = now()->addSeconds($ttlSeconds)->timestamp;
-
-        $statusWrite = function (array $status) use ($statusPath, $expiresAt): void {
-            $tmp = $statusPath.'.tmp';
-            $status['expires_at'] = $status['expires_at'] ?? $expiresAt;
-            file_put_contents($tmp, json_encode($status, JSON_UNESCAPED_UNICODE));
-            @rename($tmp, $statusPath);
-        };
-
-        $statusWrite([
-            'state' => 'pending',
-            'expires_at' => $expiresAt,
-            'payload' => $payload,
+        return response()->download($templatePath, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
         ]);
-
-        $responseData = [
-            'export_token' => $token,
-            'status' => 'queued',
-            'poll_interval_ms' => 500,
-            'expires_in_seconds' => $ttlSeconds,
-        ];
-        // Never generate inside this request (DO App Platform gateways can time out).
-        // Spawn a separate PHP process that writes the export + updates the status file.
-        $spawned = false;
-        if (function_exists('exec')) {
-            $artisanPath = base_path('artisan');
-            $cmd = sprintf(
-                '%s %s accomplishment:generate-export %d %s > /dev/null 2>&1 &',
-                escapeshellarg(PHP_BINARY),
-                escapeshellarg($artisanPath),
-                $userId,
-                escapeshellarg($token)
-            );
-            $output = [];
-            $returnVar = 1;
-            @exec($cmd, $output, $returnVar);
-            $spawned = $returnVar === 0;
-        }
-
-        if (! $spawned) {
-            $statusWrite([
-                'state' => 'failed',
-                'message' => 'Background export could not start. Please try again.',
-            ]);
-        }
-
-        return response()->json($responseData, 202);
     }
 
     /**
@@ -205,7 +153,7 @@ class AccomplishmentReportController extends Controller
             return response()->json(['message' => 'Invalid export token.'], 422);
         }
 
-        $exportDir = storage_path('app/temp/accomplishment_exports');
+        $exportDir = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR).'/accomplishment_exports';
         $statusDir = $exportDir.'/status';
         $statusPath = $statusDir.'/'.$user->id.'_'.$token.'.json';
         if (! is_readable($statusPath)) {
@@ -262,7 +210,7 @@ class AccomplishmentReportController extends Controller
             return response()->json(['message' => 'Invalid export token.'], 422);
         }
 
-        $exportDir = storage_path('app/temp/accomplishment_exports');
+        $exportDir = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR).'/accomplishment_exports';
         $statusDir = $exportDir.'/status';
         $statusPath = $statusDir.'/'.$user->id.'_'.$token.'.json';
         if (! is_readable($statusPath)) {

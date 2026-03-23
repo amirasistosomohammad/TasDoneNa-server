@@ -15,7 +15,8 @@ Artisan::command('inspire', function () {
 
 Artisan::command('accomplishment:generate-export {userId} {token}', function (string $userId, string $token): void {
     $ttlSeconds = (int) config('accomplishment_report_export.export_cache_ttl_seconds', 900);
-    $exportDir = storage_path('app/temp/accomplishment_exports');
+    // Use OS temp to avoid slow / blocked storage on some deployment platforms.
+    $exportDir = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR).'/accomplishment_exports';
     $statusDir = $exportDir.'/status';
     $statusPath = $statusDir.'/'.$userId.'_'.$token.'.json';
     $exportPath = $exportDir.'/'.$userId.'_'.$token.'.xlsx';
