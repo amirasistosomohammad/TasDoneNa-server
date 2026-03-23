@@ -99,7 +99,7 @@ class AccomplishmentReportController extends Controller
      * Officer: build Excel from completed tasks for a year/month and download immediately.
      * Uses the official template and fills it with system data.
      */
-    public function exportFromPeriod(Request $request, AccomplishmentReportExcelExportService $excel): JsonResponse|BinaryFileResponse
+    public function exportFromPeriod(Request $request, AccomplishmentReportExcelExportService $excel): JsonResponse|StreamedResponse
     {
         $auth = $request->user();
         if ($auth->role !== 'officer') {
