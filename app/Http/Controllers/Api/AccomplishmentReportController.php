@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\AccomplishmentReport;
+use App\Models\User;
 use App\Services\AccomplishmentReportDataService;
 use App\Services\AccomplishmentReportExcelExportService;
 use Illuminate\Http\JsonResponse;
@@ -95,8 +96,8 @@ class AccomplishmentReportController extends Controller
     }
 
     /**
-     * Officer: deployment-safe fallback export.
-     * Returns the raw Excel template directly (fast path, no heavy generation).
+     * Officer: build Excel from completed tasks for a year/month and download immediately.
+     * Uses the official template and fills it with system data.
      */
     public function exportFromPeriod(Request $request, AccomplishmentReportExcelExportService $excel): JsonResponse|BinaryFileResponse
     {
@@ -126,17 +127,30 @@ class AccomplishmentReportController extends Controller
             ], 503);
         }
 
-        $templatePath = $excel->templatePath();
-        $filename = sprintf(
-            'Accomplishment_Report_Template_%04d-%02d.xlsx',
-            (int) $validated['year'],
-            (int) $validated['month']
-        );
+        $officer = User::query()
+            ->select(['id', 'name', 'email', 'position', 'division', 'school_name'])
+            ->find($auth->id);
 
-        return response()->download($templatePath, $filename, [
-            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+        if (! $officer) {
+            return response()->json(['message' => 'User not found.'], 404);
+        }
+
+        $tasksSummary = app(AccomplishmentReportDataService::class)
+            ->tasksSummaryForOfficerMonth($officer->id, (int) $validated['year'], (int) $validated['month']);
+
+        $report = new AccomplishmentReport([
+            'year' => (int) $validated['year'],
+            'month' => (int) $validated['month'],
+            'tasks_summary' => $tasksSummary,
         ]);
+        $report->setRelation('user', $officer);
+
+        return $this->streamFilledAccomplishmentExcel(
+            $report,
+            $excel,
+            (string) $validated['school_head_name'],
+            (string) $validated['school_head_designation']
+        );
     }
 
     /**
