@@ -60,10 +60,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/tasks/{id}', [TaskController::class, 'officerUpdate']);
         Route::delete('/tasks/{id}', [TaskController::class, 'officerDestroy']);
 
-        // Accomplishment Reports (Phase 3.1, 3.2)
-        Route::get('/accomplishment-reports', [AccomplishmentReportController::class, 'index']);
-        Route::post('/accomplishment-reports/export', [AccomplishmentReportController::class, 'exportFromPeriod'])
+        // Accomplishment Reports (Phase 3.1, 3.2) — export/{token} routes must be registered before {id}
+        Route::get('/accomplishment-reports/export/{token}/status', [AccomplishmentReportController::class, 'exportFromPeriodStatus'])
+            ->where('token', '[A-Za-z0-9]{32,80}');
+        Route::get('/accomplishment-reports/export/{token}/download', [AccomplishmentReportController::class, 'exportFromPeriodDownload'])
+            ->where('token', '[A-Za-z0-9]{32,80}')
             ->middleware('accomplishment_export_timeout');
+        Route::get('/accomplishment-reports', [AccomplishmentReportController::class, 'index']);
+        Route::post('/accomplishment-reports/export', [AccomplishmentReportController::class, 'exportFromPeriod']);
         Route::post('/accomplishment-reports', [AccomplishmentReportController::class, 'store']);
         Route::get('/accomplishment-reports/{id}', [AccomplishmentReportController::class, 'show']);
         Route::get('/accomplishment-reports/{id}/export', [AccomplishmentReportController::class, 'export'])

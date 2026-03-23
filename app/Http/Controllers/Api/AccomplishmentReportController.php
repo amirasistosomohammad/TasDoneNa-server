@@ -4,14 +4,15 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\AccomplishmentReport;
-use App\Models\Task;
 use App\Models\User;
+use App\Services\AccomplishmentReportDataService;
 use App\Services\AccomplishmentReportExcelExportService;
-use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AccomplishmentReportController extends Controller
@@ -96,10 +97,10 @@ class AccomplishmentReportController extends Controller
     }
 
     /**
-     * Officer: build Excel from completed tasks for a year/month and download immediately.
-     * Does not create or update accomplishment_reports rows.
+     * Officer: queue Excel build after the HTTP response (avoids reverse-proxy 504 on slow hosts).
+     * Client polls exportFromPeriodStatus then downloads exportFromPeriodDownload.
      */
-    public function exportFromPeriod(Request $request, AccomplishmentReportExcelExportService $excel): JsonResponse|StreamedResponse
+    public function exportFromPeriod(Request $request, AccomplishmentReportExcelExportService $excel): JsonResponse
     {
         $auth = $request->user();
         if ($auth->role !== 'officer') {
@@ -121,29 +122,194 @@ class AccomplishmentReportController extends Controller
             ], 422);
         }
 
-        $officer = User::query()
-            ->select(['id', 'name', 'email', 'position', 'division', 'school_name'])
-            ->find($auth->id);
-
-        if (! $officer) {
-            return response()->json(['message' => 'User not found.'], 404);
+        if (! $excel->templateExists()) {
+            return response()->json([
+                'message' => 'Excel template is not installed on the server. Place Accomplishment-Report_AO_Final.xlsx under storage/app/templates/ (or set ACCOMPLISHMENT_REPORT_TEMPLATE / ACCOMPLISHMENT_REPORT_TEMPLATE_RELATIVE in .env). See storage/app/templates/README.txt.',
+            ], 503);
         }
 
-        $tasksSummary = $this->tasksSummaryForOfficerMonth($officer->id, $validated['year'], $validated['month']);
+        $userId = $auth->id;
+        $token = Str::random(48);
+        $cacheKey = self::accomplishmentExportCacheKey($userId, $token);
+        $ttlSeconds = (int) config('accomplishment_report_export.export_cache_ttl_seconds', 900);
 
-        $report = new AccomplishmentReport([
-            'year' => $validated['year'],
-            'month' => $validated['month'],
-            'tasks_summary' => $tasksSummary,
+        Cache::put($cacheKey, ['state' => 'pending'], now()->addSeconds($ttlSeconds));
+
+        $payload = $validated;
+
+        dispatch(function () use ($userId, $token, $payload, $ttlSeconds): void {
+            $key = 'accomplishment_export:'.$userId.':'.$token;
+            if (! Cache::has($key)) {
+                return;
+            }
+
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(300);
+            }
+            @ini_set('max_execution_time', '300');
+
+            Cache::put($key, ['state' => 'processing'], now()->addSeconds($ttlSeconds));
+
+            try {
+                $dataService = app(AccomplishmentReportDataService::class);
+                $excelService = app(AccomplishmentReportExcelExportService::class);
+
+                $officer = User::query()
+                    ->select(['id', 'name', 'email', 'position', 'division', 'school_name'])
+                    ->find($userId);
+
+                if (! $officer) {
+                    Cache::put($key, [
+                        'state' => 'failed',
+                        'message' => 'User not found.',
+                    ], now()->addSeconds($ttlSeconds));
+
+                    return;
+                }
+
+                $tasksSummary = $dataService->tasksSummaryForOfficerMonth(
+                    $officer->id,
+                    (int) $payload['year'],
+                    (int) $payload['month']
+                );
+
+                $report = new AccomplishmentReport([
+                    'year' => (int) $payload['year'],
+                    'month' => (int) $payload['month'],
+                    'tasks_summary' => $tasksSummary,
+                ]);
+                $report->setRelation('user', $officer);
+
+                $spreadsheet = $excelService->fill(
+                    $report,
+                    $payload['school_head_name'],
+                    $payload['school_head_designation']
+                );
+
+                $dir = storage_path('app/temp/accomplishment_exports');
+                if (! is_dir($dir)) {
+                    mkdir($dir, 0755, true);
+                }
+
+                $path = $dir.'/'.$userId.'_'.$token.'.xlsx';
+                $writer = new Xlsx($spreadsheet);
+                $writer->setPreCalculateFormulas(false);
+                $writer->setUseDiskCaching(true, storage_path('framework/cache'));
+                $writer->save($path);
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet, $writer);
+
+                $slug = Str::slug($officer->name ?? 'report', '_') ?: 'report';
+                $filename = sprintf(
+                    'Accomplishment_Report_%04d-%02d_%s.xlsx',
+                    (int) $payload['year'],
+                    (int) $payload['month'],
+                    substr($slug, 0, 80)
+                );
+
+                Cache::put($key, [
+                    'state' => 'ready',
+                    'path' => $path,
+                    'filename' => $filename,
+                ], now()->addSeconds($ttlSeconds));
+            } catch (\Throwable $e) {
+                report($e);
+                Cache::put($key, [
+                    'state' => 'failed',
+                    'message' => 'Failed to build the Excel file.',
+                ], now()->addSeconds($ttlSeconds));
+            }
+        })->afterResponse();
+
+        return response()->json([
+            'export_token' => $token,
+            'status' => 'queued',
+            'poll_interval_ms' => 500,
+            'expires_in_seconds' => $ttlSeconds,
+        ], 202);
+    }
+
+    /**
+     * Poll generation status for exportFromPeriod (pending | ready | failed | expired).
+     */
+    public function exportFromPeriodStatus(Request $request, string $token): JsonResponse
+    {
+        $user = $request->user();
+        if ($user->role !== 'officer') {
+            return response()->json(['message' => 'Unauthorized.'], 403);
+        }
+
+        if (! preg_match('/^[A-Za-z0-9]{32,80}$/', $token)) {
+            return response()->json(['message' => 'Invalid export token.'], 422);
+        }
+
+        $key = self::accomplishmentExportCacheKey($user->id, $token);
+        $data = Cache::get($key);
+
+        if (! is_array($data)) {
+            return response()->json([
+                'status' => 'expired',
+                'message' => 'This export has expired or is invalid. Generate the report again.',
+            ], 410);
+        }
+
+        $state = $data['state'] ?? 'pending';
+
+        if ($state === 'ready') {
+            return response()->json(['status' => 'ready']);
+        }
+
+        if ($state === 'failed') {
+            return response()->json([
+                'status' => 'failed',
+                'message' => $data['message'] ?? 'Export failed.',
+            ]);
+        }
+
+        return response()->json([
+            'status' => 'pending',
         ]);
-        $report->setRelation('user', $officer);
+    }
 
-        return $this->streamFilledAccomplishmentExcel(
-            $report,
-            $excel,
-            $validated['school_head_name'],
-            $validated['school_head_designation']
-        );
+    /**
+     * Download a completed period export (one-time; file is removed after send).
+     */
+    public function exportFromPeriodDownload(Request $request, string $token): JsonResponse|BinaryFileResponse
+    {
+        $user = $request->user();
+        if ($user->role !== 'officer') {
+            return response()->json(['message' => 'Unauthorized.'], 403);
+        }
+
+        if (! preg_match('/^[A-Za-z0-9]{32,80}$/', $token)) {
+            return response()->json(['message' => 'Invalid export token.'], 422);
+        }
+
+        $key = self::accomplishmentExportCacheKey($user->id, $token);
+        $data = Cache::get($key);
+
+        if (! is_array($data) || ($data['state'] ?? '') !== 'ready') {
+            return response()->json([
+                'message' => 'Report is not ready yet. Wait for generation to finish, then try again.',
+            ], 409);
+        }
+
+        $path = $data['path'] ?? null;
+        $filename = $data['filename'] ?? 'Accomplishment_Report.xlsx';
+
+        if (! is_string($path) || ! is_readable($path)) {
+            Cache::forget($key);
+
+            return response()->json([
+                'message' => 'Export file is no longer available. Generate the report again.',
+            ], 410);
+        }
+
+        Cache::forget($key);
+
+        return response()->download($path, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
     }
 
     /**
@@ -186,7 +352,8 @@ class AccomplishmentReportController extends Controller
             ], 422);
         }
 
-        $tasksSummary = $this->tasksSummaryForOfficerMonth($user->id, $validated['year'], $validated['month']);
+        $tasksSummary = app(AccomplishmentReportDataService::class)
+            ->tasksSummaryForOfficerMonth($user->id, $validated['year'], $validated['month']);
 
         // Warn if no tasks found (but allow draft reports)
         if (empty($tasksSummary) && ($validated['status'] ?? 'draft') === 'submitted') {
@@ -248,49 +415,9 @@ class AccomplishmentReportController extends Controller
         ]);
     }
 
-    /**
-     * @return list<array{kra: string, kra_weight: mixed, tasks: list<array<string, mixed>>}>
-     */
-    private function tasksSummaryForOfficerMonth(int $officerUserId, int $year, int $month): array
+    private static function accomplishmentExportCacheKey(int $userId, string $token): string
     {
-        $monthStart = Carbon::create($year, $month, 1)->startOfDay();
-        $monthEnd = $monthStart->copy()->endOfMonth();
-
-        $tasks = Task::query()
-            ->select([
-                'id', 'kra', 'kra_weight', 'title', 'description', 'mfo', 'objective', 'movs',
-                'due_date', 'updated_at', 'created_at',
-            ])
-            ->where('created_by', $officerUserId)
-            ->where('status', 'completed')
-            ->whereBetween('updated_at', [$monthStart, $monthEnd])
-            ->orderBy('kra')
-            ->orderBy('created_at')
-            ->get();
-
-        $tasksByKra = [];
-        foreach ($tasks as $task) {
-            $kra = $task->kra ?: 'Uncategorized';
-            if (! isset($tasksByKra[$kra])) {
-                $tasksByKra[$kra] = [
-                    'kra' => $kra,
-                    'kra_weight' => $task->kra_weight ?? 0,
-                    'tasks' => [],
-                ];
-            }
-            $tasksByKra[$kra]['tasks'][] = [
-                'id' => $task->id,
-                'title' => $task->title,
-                'description' => $task->description,
-                'mfo' => $task->mfo,
-                'objective' => $task->objective,
-                'movs' => $task->movs ?? [],
-                'due_date' => $task->due_date?->format('Y-m-d'),
-                'completed_at' => $task->updated_at?->format('Y-m-d H:i:s'),
-            ];
-        }
-
-        return array_values($tasksByKra);
+        return 'accomplishment_export:'.$userId.':'.$token;
     }
 
     private function streamFilledAccomplishmentExcel(

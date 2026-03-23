@@ -65,4 +65,14 @@ return [
     'merge_from_column' => 'A',
     'merge_to_column' => 'L',
 
+    /*
+    |--------------------------------------------------------------------------
+    | Async period export (cache entry for poll + download)
+    |--------------------------------------------------------------------------
+    |
+    | Use a shared cache store (database/redis) if you run more than one web instance.
+    |
+    */
+    'export_cache_ttl_seconds' => max(120, (int) env('ACCOMPLISHMENT_EXPORT_CACHE_TTL', 900)),
+
 ];
