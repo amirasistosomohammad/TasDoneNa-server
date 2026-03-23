@@ -9,7 +9,6 @@ use App\Services\AccomplishmentReportDataService;
 use App\Services\AccomplishmentReportExcelExportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -130,118 +129,197 @@ class AccomplishmentReportController extends Controller
 
         $userId = $auth->id;
         $token = Str::random(48);
-        $cacheKey = self::accomplishmentExportCacheKey($userId, $token);
         $ttlSeconds = (int) config('accomplishment_report_export.export_cache_ttl_seconds', 900);
-
-        Cache::put($cacheKey, ['state' => 'pending', 'payload' => $validated], now()->addSeconds($ttlSeconds));
-
         $payload = $validated;
 
-        // On deployment hosts, "queued closures" can still delay the response (504).
-        // Prefer starting a background Artisan process, then fall back to the queue.
-        $spawned = false;
-        if (function_exists('exec') && strtoupper(PHP_OS_FAMILY ?? '') !== 'WINDOWS') {
-            $artisanPath = base_path('artisan');
-            $cmd = sprintf(
-                '%s %s accomplishment:generate-export %d %s > /dev/null 2>&1 &',
-                escapeshellarg(PHP_BINARY),
-                escapeshellarg($artisanPath),
-                $userId,
-                escapeshellarg($token)
-            );
-            $output = [];
-            $returnVar = 1;
-            @exec($cmd, $output, $returnVar);
-            $spawned = $returnVar === 0;
+        $exportDir = storage_path('app/temp/accomplishment_exports');
+        $statusDir = $exportDir.'/status';
+        if (! is_dir($exportDir)) {
+            mkdir($exportDir, 0755, true);
+        }
+        if (! is_dir($statusDir)) {
+            mkdir($statusDir, 0755, true);
         }
 
-        if (! $spawned) {
-            dispatch(function () use ($userId, $token, $payload, $ttlSeconds): void {
-                $key = 'accomplishment_export:'.$userId.':'.$token;
-                if (! Cache::has($key)) {
-                    return;
-                }
+        $statusPath = $statusDir.'/'.$userId.'_'.$token.'.json';
+        $exportPath = $exportDir.'/'.$userId.'_'.$token.'.xlsx';
+        $expiresAt = now()->addSeconds($ttlSeconds)->timestamp;
 
-                Cache::put($key, ['state' => 'processing'], now()->addSeconds($ttlSeconds));
+        $statusWrite = function (array $status) use ($statusPath, $expiresAt): void {
+            $tmp = $statusPath.'.tmp';
+            $status['expires_at'] = $status['expires_at'] ?? $expiresAt;
+            file_put_contents($tmp, json_encode($status, JSON_UNESCAPED_UNICODE));
+            @rename($tmp, $statusPath);
+        };
 
-                try {
-                    $dataService = app(AccomplishmentReportDataService::class);
-                    $excelService = app(AccomplishmentReportExcelExportService::class);
+        $statusWrite([
+            'state' => 'pending',
+            'expires_at' => $expiresAt,
+            'payload' => $payload,
+        ]);
 
-                    $officer = User::query()
-                        ->select(['id', 'name', 'email', 'position', 'division', 'school_name'])
-                        ->find($userId);
-
-                    if (! $officer) {
-                        Cache::put($key, [
-                            'state' => 'failed',
-                            'message' => 'User not found.',
-                        ], now()->addSeconds($ttlSeconds));
-
-                        return;
-                    }
-
-                    $tasksSummary = $dataService->tasksSummaryForOfficerMonth(
-                        $officer->id,
-                        (int) $payload['year'],
-                        (int) $payload['month']
-                    );
-
-                    $report = new AccomplishmentReport([
-                        'year' => (int) $payload['year'],
-                        'month' => (int) $payload['month'],
-                        'tasks_summary' => $tasksSummary,
-                    ]);
-                    $report->setRelation('user', $officer);
-
-                    $spreadsheet = $excelService->fill(
-                        $report,
-                        $payload['school_head_name'],
-                        $payload['school_head_designation']
-                    );
-
-                    $dir = storage_path('app/temp/accomplishment_exports');
-                    if (! is_dir($dir)) {
-                        mkdir($dir, 0755, true);
-                    }
-
-                    $path = $dir.'/'.$userId.'_'.$token.'.xlsx';
-                    $writer = new Xlsx($spreadsheet);
-                    $writer->setPreCalculateFormulas(false);
-                    $writer->setUseDiskCaching(true, storage_path('framework/cache'));
-                    $writer->save($path);
-                    $spreadsheet->disconnectWorksheets();
-                    unset($spreadsheet, $writer);
-
-                    $slug = Str::slug($officer->name ?? 'report', '_') ?: 'report';
-                    $filename = sprintf(
-                        'Accomplishment_Report_%04d-%02d_%s.xlsx',
-                        (int) $payload['year'],
-                        (int) $payload['month'],
-                        substr($slug, 0, 80)
-                    );
-
-                    Cache::put($key, [
-                        'state' => 'ready',
-                        'path' => $path,
-                        'filename' => $filename,
-                    ], now()->addSeconds($ttlSeconds));
-                } catch (\Throwable $e) {
-                    report($e);
-                    Cache::put($key, [
-                        'state' => 'failed',
-                        'message' => 'Failed to build the Excel file.',
-                    ], now()->addSeconds($ttlSeconds));
-                }
-            })->afterResponse();
-        }
-
-        return response()->json([
+        $responseData = [
             'export_token' => $token,
             'status' => 'queued',
             'poll_interval_ms' => 500,
             'expires_in_seconds' => $ttlSeconds,
-        ], 202);
+        ];
+
+        // Deployment hosts (e.g. DigitalOcean App Platform) may cut long requests before Excel is generated.
+        // With `fastcgi_finish_request`, we flush the 202 immediately and then generate the file.
+        if (function_exists('fastcgi_finish_request')) {
+            @ignore_user_abort(true);
+            @set_time_limit(0);
+            @session_write_close();
+
+            while (ob_get_level() > 0) {
+                @ob_end_flush();
+            }
+
+            if (! headers_sent()) {
+                header('Content-Type: application/json');
+                header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+                http_response_code(202);
+            }
+
+            echo json_encode($responseData);
+            @flush();
+            fastcgi_finish_request();
+
+            try {
+                $statusWrite(['state' => 'processing']);
+
+                $dataService = app(AccomplishmentReportDataService::class);
+
+                $officer = User::query()
+                    ->select(['id', 'name', 'email', 'position', 'division', 'school_name'])
+                    ->find($userId);
+
+                if (! $officer) {
+                    $statusWrite([
+                        'state' => 'failed',
+                        'message' => 'User not found.',
+                    ]);
+                    exit;
+                }
+
+                $tasksSummary = $dataService->tasksSummaryForOfficerMonth(
+                    $officer->id,
+                    (int) $payload['year'],
+                    (int) $payload['month']
+                );
+
+                $report = new AccomplishmentReport([
+                    'year' => (int) $payload['year'],
+                    'month' => (int) $payload['month'],
+                    'tasks_summary' => $tasksSummary,
+                ]);
+                $report->setRelation('user', $officer);
+
+                $spreadsheet = $excel->fill(
+                    $report,
+                    (string) $payload['school_head_name'],
+                    (string) $payload['school_head_designation']
+                );
+
+                $writer = new Xlsx($spreadsheet);
+                $writer->setPreCalculateFormulas(false);
+                $writer->setUseDiskCaching(true, storage_path('framework/cache'));
+                $writer->save($exportPath);
+
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet, $writer);
+
+                $slug = Str::slug($officer->name ?? 'report', '_') ?: 'report';
+                $filename = sprintf(
+                    'Accomplishment_Report_%04d-%02d_%s.xlsx',
+                    (int) $payload['year'],
+                    (int) $payload['month'],
+                    substr($slug, 0, 80)
+                );
+
+                $statusWrite([
+                    'state' => 'ready',
+                    'path' => $exportPath,
+                    'filename' => $filename,
+                ]);
+            } catch (\Throwable $e) {
+                report($e);
+                $statusWrite([
+                    'state' => 'failed',
+                    'message' => 'Failed to build the Excel file.',
+                ]);
+            }
+
+            exit;
+        }
+
+        // Fallback: if fastcgi isn't available, still return immediately and attempt async work.
+        dispatch(function () use ($userId, $payload, $excel, $statusWrite, $exportPath): void {
+            $statusWrite(['state' => 'processing']);
+            try {
+                $dataService = app(AccomplishmentReportDataService::class);
+                $officer = User::query()
+                    ->select(['id', 'name', 'email', 'position', 'division', 'school_name'])
+                    ->find($userId);
+                if (! $officer) {
+                    $statusWrite([
+                        'state' => 'failed',
+                        'message' => 'User not found.',
+                    ]);
+
+                    return;
+                }
+
+                $tasksSummary = $dataService->tasksSummaryForOfficerMonth(
+                    $officer->id,
+                    (int) $payload['year'],
+                    (int) $payload['month']
+                );
+
+                $report = new AccomplishmentReport([
+                    'year' => (int) $payload['year'],
+                    'month' => (int) $payload['month'],
+                    'tasks_summary' => $tasksSummary,
+                ]);
+                $report->setRelation('user', $officer);
+
+                $spreadsheet = $excel->fill(
+                    $report,
+                    (string) $payload['school_head_name'],
+                    (string) $payload['school_head_designation']
+                );
+
+                $writer = new Xlsx($spreadsheet);
+                $writer->setPreCalculateFormulas(false);
+                $writer->setUseDiskCaching(true, storage_path('framework/cache'));
+                $writer->save($exportPath);
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet, $writer);
+
+                $slug = Str::slug($officer->name ?? 'report', '_') ?: 'report';
+                $filename = sprintf(
+                    'Accomplishment_Report_%04d-%02d_%s.xlsx',
+                    (int) $payload['year'],
+                    (int) $payload['month'],
+                    substr($slug, 0, 80)
+                );
+
+                $statusWrite([
+                    'state' => 'ready',
+                    'path' => $exportPath,
+                    'filename' => $filename,
+                ]);
+            } catch (\Throwable $e) {
+                report($e);
+                $statusWrite([
+                    'state' => 'failed',
+                    'message' => 'Failed to build the Excel file.',
+                ]);
+            }
+        })->afterResponse();
+
+        return response()->json($responseData, 202);
     }
 
     /**
@@ -258,13 +336,28 @@ class AccomplishmentReportController extends Controller
             return response()->json(['message' => 'Invalid export token.'], 422);
         }
 
-        $key = self::accomplishmentExportCacheKey($user->id, $token);
-        $data = Cache::get($key);
-
+        $exportDir = storage_path('app/temp/accomplishment_exports');
+        $statusDir = $exportDir.'/status';
+        $statusPath = $statusDir.'/'.$user->id.'_'.$token.'.json';
+        if (! is_readable($statusPath)) {
+            return response()->json([
+                'status' => 'expired',
+                'message' => 'This export has expired or is invalid. Generate the report again.',
+            ], 410);
+        }
+        $data = json_decode((string) file_get_contents($statusPath), true);
         if (! is_array($data)) {
             return response()->json([
                 'status' => 'expired',
                 'message' => 'This export has expired or is invalid. Generate the report again.',
+            ], 410);
+        }
+
+        $expiresAt = $data['expires_at'] ?? null;
+        if (is_int($expiresAt) && time() > $expiresAt) {
+            return response()->json([
+                'status' => 'expired',
+                'message' => 'This export has expired. Generate the report again.',
             ], 410);
         }
 
@@ -300,9 +393,16 @@ class AccomplishmentReportController extends Controller
             return response()->json(['message' => 'Invalid export token.'], 422);
         }
 
-        $key = self::accomplishmentExportCacheKey($user->id, $token);
-        $data = Cache::get($key);
+        $exportDir = storage_path('app/temp/accomplishment_exports');
+        $statusDir = $exportDir.'/status';
+        $statusPath = $statusDir.'/'.$user->id.'_'.$token.'.json';
+        if (! is_readable($statusPath)) {
+            return response()->json([
+                'message' => 'Report is not ready yet. Wait for generation to finish, then try again.',
+            ], 409);
+        }
 
+        $data = json_decode((string) file_get_contents($statusPath), true);
         if (! is_array($data) || ($data['state'] ?? '') !== 'ready') {
             return response()->json([
                 'message' => 'Report is not ready yet. Wait for generation to finish, then try again.',
@@ -313,14 +413,15 @@ class AccomplishmentReportController extends Controller
         $filename = $data['filename'] ?? 'Accomplishment_Report.xlsx';
 
         if (! is_string($path) || ! is_readable($path)) {
-            Cache::forget($key);
-
             return response()->json([
                 'message' => 'Export file is no longer available. Generate the report again.',
             ], 410);
         }
 
-        Cache::forget($key);
+        $statusPathCopy = $statusPath;
+        register_shutdown_function(function () use ($statusPathCopy) {
+            @unlink($statusPathCopy);
+        });
 
         return response()->download($path, $filename, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
