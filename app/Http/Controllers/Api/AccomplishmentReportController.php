@@ -133,93 +133,108 @@ class AccomplishmentReportController extends Controller
         $cacheKey = self::accomplishmentExportCacheKey($userId, $token);
         $ttlSeconds = (int) config('accomplishment_report_export.export_cache_ttl_seconds', 900);
 
-        Cache::put($cacheKey, ['state' => 'pending'], now()->addSeconds($ttlSeconds));
+        Cache::put($cacheKey, ['state' => 'pending', 'payload' => $validated], now()->addSeconds($ttlSeconds));
 
         $payload = $validated;
 
-        dispatch(function () use ($userId, $token, $payload, $ttlSeconds): void {
-            $key = 'accomplishment_export:'.$userId.':'.$token;
-            if (! Cache::has($key)) {
-                return;
-            }
+        // On deployment hosts, "queued closures" can still delay the response (504).
+        // Prefer starting a background Artisan process, then fall back to the queue.
+        $spawned = false;
+        if (function_exists('exec') && strtoupper(PHP_OS_FAMILY ?? '') !== 'WINDOWS') {
+            $artisanPath = base_path('artisan');
+            $cmd = sprintf(
+                '%s %s accomplishment:generate-export %d %s > /dev/null 2>&1 &',
+                escapeshellarg(PHP_BINARY),
+                escapeshellarg($artisanPath),
+                $userId,
+                escapeshellarg($token)
+            );
+            $output = [];
+            $returnVar = 1;
+            @exec($cmd, $output, $returnVar);
+            $spawned = $returnVar === 0;
+        }
 
-            if (function_exists('set_time_limit')) {
-                @set_time_limit(300);
-            }
-            @ini_set('max_execution_time', '300');
-
-            Cache::put($key, ['state' => 'processing'], now()->addSeconds($ttlSeconds));
-
-            try {
-                $dataService = app(AccomplishmentReportDataService::class);
-                $excelService = app(AccomplishmentReportExcelExportService::class);
-
-                $officer = User::query()
-                    ->select(['id', 'name', 'email', 'position', 'division', 'school_name'])
-                    ->find($userId);
-
-                if (! $officer) {
-                    Cache::put($key, [
-                        'state' => 'failed',
-                        'message' => 'User not found.',
-                    ], now()->addSeconds($ttlSeconds));
-
+        if (! $spawned) {
+            dispatch(function () use ($userId, $token, $payload, $ttlSeconds): void {
+                $key = 'accomplishment_export:'.$userId.':'.$token;
+                if (! Cache::has($key)) {
                     return;
                 }
 
-                $tasksSummary = $dataService->tasksSummaryForOfficerMonth(
-                    $officer->id,
-                    (int) $payload['year'],
-                    (int) $payload['month']
-                );
+                Cache::put($key, ['state' => 'processing'], now()->addSeconds($ttlSeconds));
 
-                $report = new AccomplishmentReport([
-                    'year' => (int) $payload['year'],
-                    'month' => (int) $payload['month'],
-                    'tasks_summary' => $tasksSummary,
-                ]);
-                $report->setRelation('user', $officer);
+                try {
+                    $dataService = app(AccomplishmentReportDataService::class);
+                    $excelService = app(AccomplishmentReportExcelExportService::class);
 
-                $spreadsheet = $excelService->fill(
-                    $report,
-                    $payload['school_head_name'],
-                    $payload['school_head_designation']
-                );
+                    $officer = User::query()
+                        ->select(['id', 'name', 'email', 'position', 'division', 'school_name'])
+                        ->find($userId);
 
-                $dir = storage_path('app/temp/accomplishment_exports');
-                if (! is_dir($dir)) {
-                    mkdir($dir, 0755, true);
+                    if (! $officer) {
+                        Cache::put($key, [
+                            'state' => 'failed',
+                            'message' => 'User not found.',
+                        ], now()->addSeconds($ttlSeconds));
+
+                        return;
+                    }
+
+                    $tasksSummary = $dataService->tasksSummaryForOfficerMonth(
+                        $officer->id,
+                        (int) $payload['year'],
+                        (int) $payload['month']
+                    );
+
+                    $report = new AccomplishmentReport([
+                        'year' => (int) $payload['year'],
+                        'month' => (int) $payload['month'],
+                        'tasks_summary' => $tasksSummary,
+                    ]);
+                    $report->setRelation('user', $officer);
+
+                    $spreadsheet = $excelService->fill(
+                        $report,
+                        $payload['school_head_name'],
+                        $payload['school_head_designation']
+                    );
+
+                    $dir = storage_path('app/temp/accomplishment_exports');
+                    if (! is_dir($dir)) {
+                        mkdir($dir, 0755, true);
+                    }
+
+                    $path = $dir.'/'.$userId.'_'.$token.'.xlsx';
+                    $writer = new Xlsx($spreadsheet);
+                    $writer->setPreCalculateFormulas(false);
+                    $writer->setUseDiskCaching(true, storage_path('framework/cache'));
+                    $writer->save($path);
+                    $spreadsheet->disconnectWorksheets();
+                    unset($spreadsheet, $writer);
+
+                    $slug = Str::slug($officer->name ?? 'report', '_') ?: 'report';
+                    $filename = sprintf(
+                        'Accomplishment_Report_%04d-%02d_%s.xlsx',
+                        (int) $payload['year'],
+                        (int) $payload['month'],
+                        substr($slug, 0, 80)
+                    );
+
+                    Cache::put($key, [
+                        'state' => 'ready',
+                        'path' => $path,
+                        'filename' => $filename,
+                    ], now()->addSeconds($ttlSeconds));
+                } catch (\Throwable $e) {
+                    report($e);
+                    Cache::put($key, [
+                        'state' => 'failed',
+                        'message' => 'Failed to build the Excel file.',
+                    ], now()->addSeconds($ttlSeconds));
                 }
-
-                $path = $dir.'/'.$userId.'_'.$token.'.xlsx';
-                $writer = new Xlsx($spreadsheet);
-                $writer->setPreCalculateFormulas(false);
-                $writer->setUseDiskCaching(true, storage_path('framework/cache'));
-                $writer->save($path);
-                $spreadsheet->disconnectWorksheets();
-                unset($spreadsheet, $writer);
-
-                $slug = Str::slug($officer->name ?? 'report', '_') ?: 'report';
-                $filename = sprintf(
-                    'Accomplishment_Report_%04d-%02d_%s.xlsx',
-                    (int) $payload['year'],
-                    (int) $payload['month'],
-                    substr($slug, 0, 80)
-                );
-
-                Cache::put($key, [
-                    'state' => 'ready',
-                    'path' => $path,
-                    'filename' => $filename,
-                ], now()->addSeconds($ttlSeconds));
-            } catch (\Throwable $e) {
-                report($e);
-                Cache::put($key, [
-                    'state' => 'failed',
-                    'message' => 'Failed to build the Excel file.',
-                ], now()->addSeconds($ttlSeconds));
-            }
-        })->afterResponse();
+            })->afterResponse();
+        }
 
         return response()->json([
             'export_token' => $token,
