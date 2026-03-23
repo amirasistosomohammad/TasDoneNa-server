@@ -13,7 +13,7 @@ use Illuminate\Support\Str;
 class UserProfileController extends Controller
 {
     /**
-     * PUT /api/user/profile — update profile (name, employee_id, position, division, school_name).
+     * PUT /api/user/profile — update profile (name, employee_id, position, division, district, school_name).
      */
     public function updateProfile(Request $request): JsonResponse
     {
@@ -22,6 +22,7 @@ class UserProfileController extends Controller
             'employee_id' => ['nullable', 'string', 'max:100'],
             'position' => ['nullable', 'string', 'max:255'],
             'division' => ['nullable', 'string', 'max:255'],
+            'district' => ['nullable', 'string', 'max:255'],
             'school_name' => ['nullable', 'string', 'max:255'],
         ]);
 
@@ -31,6 +32,7 @@ class UserProfileController extends Controller
             'employee_id' => $validated['employee_id'] ?? null,
             'position' => $validated['position'] ?? null,
             'division' => $validated['division'] ?? null,
+            'district' => $validated['district'] ?? null,
             'school_name' => $validated['school_name'] ?? null,
         ]);
         $user->refresh();
@@ -128,6 +130,7 @@ class UserProfileController extends Controller
             'employee_id',
             'position',
             'division',
+            'district',
             'school_name',
         ]) + [
             'avatar_url' => UserPublicMedia::avatarUrlForClient($user),

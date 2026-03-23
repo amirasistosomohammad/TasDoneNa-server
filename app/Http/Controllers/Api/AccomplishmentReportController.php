@@ -58,7 +58,7 @@ class AccomplishmentReportController extends Controller
     public function show(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-        $report = AccomplishmentReport::with(['user:id,name,email,position,division,school_name', 'notedBy:id,name'])
+        $report = AccomplishmentReport::with(['user:id,name,email,position,division,district,school_name', 'notedBy:id,name'])
             ->find($id);
 
         if (! $report) {
@@ -78,7 +78,7 @@ class AccomplishmentReportController extends Controller
     public function export(Request $request, int $id, AccomplishmentReportExcelExportService $excel): JsonResponse|StreamedResponse
     {
         $user = $request->user();
-        $report = AccomplishmentReport::with(['user:id,name,email,position,division,school_name'])->find($id);
+        $report = AccomplishmentReport::with(['user:id,name,email,position,division,district,school_name'])->find($id);
 
         if (! $report) {
             return response()->json(['message' => 'Accomplishment report not found.'], 404);
@@ -128,7 +128,7 @@ class AccomplishmentReportController extends Controller
         }
 
         $officer = User::query()
-            ->select(['id', 'name', 'email', 'position', 'division', 'school_name'])
+            ->select(['id', 'name', 'email', 'position', 'division', 'district', 'school_name'])
             ->find($auth->id);
 
         if (! $officer) {

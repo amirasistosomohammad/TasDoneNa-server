@@ -48,13 +48,14 @@ class AuthController extends Controller
             'employee_id' => ['nullable', 'string', 'max:100'],
             'position' => ['required', 'string', 'max:255'],
             'division' => ['required', 'string', 'max:255'],
+            'district' => ['required', 'string', 'max:255'],
             'school_name' => ['required', 'string', 'max:255'],
         ]);
 
         // Check for existing user (including soft-deleted)
         $existing = User::withTrashed()->where('email', $validated['email'])->first();
 
-        if ($existing && $existing->email_verified_at && !$existing->trashed()) {
+        if ($existing && $existing->email_verified_at && ! $existing->trashed()) {
             throw ValidationException::withMessages([
                 'email' => ['This email is already registered. Please sign in.'],
             ]);
@@ -70,6 +71,7 @@ class AuthController extends Controller
                 'employee_id' => $validated['employee_id'] ?? null,
                 'position' => $validated['position'],
                 'division' => $validated['division'],
+                'district' => $validated['district'],
                 'school_name' => $validated['school_name'],
                 'status' => 'pending', // Reset to pending for admin review
                 'email_verified_at' => null, // Reset email verification
@@ -86,6 +88,7 @@ class AuthController extends Controller
                 'employee_id' => $validated['employee_id'] ?? null,
                 'position' => $validated['position'],
                 'division' => $validated['division'],
+                'district' => $validated['district'],
                 'school_name' => $validated['school_name'],
             ]);
             $user = $existing;
@@ -100,6 +103,7 @@ class AuthController extends Controller
                 'employee_id' => $validated['employee_id'] ?? null,
                 'position' => $validated['position'],
                 'division' => $validated['division'],
+                'district' => $validated['district'],
                 'school_name' => $validated['school_name'],
             ]);
         }
@@ -179,7 +183,7 @@ class AuthController extends Controller
         $this->sendOtpToUser($user);
 
         return response()->json([
-            'message' => 'A new OTP has been sent to your email. It expires in ' . self::OTP_EXIRY_MINUTES . ' minutes.',
+            'message' => 'A new OTP has been sent to your email. It expires in '.self::OTP_EXIRY_MINUTES.' minutes.',
         ]);
     }
 
@@ -219,7 +223,7 @@ class AuthController extends Controller
             );
 
             $frontendUrl = rtrim(config('app.frontend_url'), '/');
-            $resetUrl = $frontendUrl . '/reset-password?token=' . urlencode($token) . '&email=' . urlencode($user->email);
+            $resetUrl = $frontendUrl.'/reset-password?token='.urlencode($token).'&email='.urlencode($user->email);
 
             Mail::to($user->email)->send(new ResetPasswordMail(
                 $resetUrl,
@@ -335,7 +339,7 @@ class AuthController extends Controller
 
         $user->ensurePublicMediaTokens();
 
-        $userData = $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']);
+        $userData = $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'district', 'school_name']);
         $userData['avatar_url'] = UserPublicMedia::avatarUrlForClient($user);
         $userData['school_logo_url'] = UserPublicMedia::schoolLogoUrlForClient($user);
 
@@ -366,6 +370,7 @@ class AuthController extends Controller
 
         if ($user->status === 'rejected') {
             $request->user()->currentAccessToken()->delete();
+
             return response()->json([
                 'message' => 'Your account has been rejected.',
                 'reason' => $user->rejection_reason,
@@ -375,6 +380,7 @@ class AuthController extends Controller
 
         if ($user->role === 'officer' && ! $user->is_active) {
             $request->user()->currentAccessToken()->delete();
+
             return response()->json([
                 'message' => 'Your account has been deactivated.',
                 'reason' => $user->deactivation_reason,
@@ -384,7 +390,7 @@ class AuthController extends Controller
 
         $user->ensurePublicMediaTokens();
 
-        $userData = $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'school_name']);
+        $userData = $user->only(['id', 'name', 'email', 'role', 'status', 'is_active', 'employee_id', 'position', 'division', 'district', 'school_name']);
         $userData['avatar_url'] = UserPublicMedia::avatarUrlForClient($user);
         $userData['school_logo_url'] = UserPublicMedia::schoolLogoUrlForClient($user);
 
@@ -406,7 +412,7 @@ class AuthController extends Controller
 
         $user = $request->user();
 
-        if (!Hash::check($validated['current_password'], $user->password)) {
+        if (! Hash::check($validated['current_password'], $user->password)) {
             throw ValidationException::withMessages([
                 'current_password' => ['The current password is incorrect.'],
             ]);

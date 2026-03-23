@@ -42,6 +42,8 @@ return [
         'name' => 'E11',
         'designation' => 'E12',
         'period_cover' => 'E13',
+        'district' => env('ACCOMPLISHMENT_REPORT_DISTRICT_CELL', ''),
+        'school_name' => env('ACCOMPLISHMENT_REPORT_SCHOOL_NAME_CELL', ''),
         'prepared_by_name' => env('ACCOMPLISHMENT_REPORT_PREPARED_BY_NAME_CELL', 'C36'),
         'prepared_by_position' => env('ACCOMPLISHMENT_REPORT_PREPARED_BY_POSITION_CELL', 'C37'),
         'certified_by_name' => env('ACCOMPLISHMENT_REPORT_CERTIFIED_BY_NAME_CELL', 'I43'),

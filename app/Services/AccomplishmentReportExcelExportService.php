@@ -72,6 +72,16 @@ class AccomplishmentReportExcelExportService
                 $monthName.' 1–'.$monthEnd->day.', '.$year
             );
         }
+        if (! empty($cells['district'])) {
+            $sheet->setCellValue($cells['district'], $user?->district ?? '');
+        }
+        if (! empty($cells['school_name'])) {
+            $sheet->setCellValue($cells['school_name'], $user?->school_name ?? '');
+        }
+
+        // Fallback for fixed-text templates: replace old sample literals directly.
+        $this->replaceTemplateLiteral($sheet, 'Tigbao District', $user?->district ?? '');
+        $this->replaceTemplateLiteral($sheet, 'Tigbao National High School', $user?->school_name ?? '');
 
         $rowsInsertedBelowKraBand = $this->fillDataRows($sheet, $report);
 
@@ -270,6 +280,26 @@ class AccomplishmentReportExcelExportService
             $sheet->unmergeCells($range);
         } catch (\Throwable) {
             // not merged or range does not match template merge exactly
+        }
+    }
+
+    protected function replaceTemplateLiteral(Worksheet $sheet, string $from, string $to): void
+    {
+        $replacement = trim($to);
+        if ($replacement === '') {
+            return;
+        }
+        $maxRow = max(1, (int) $sheet->getHighestRow());
+        $maxCol = Coordinate::columnIndexFromString($sheet->getHighestColumn());
+        for ($r = 1; $r <= $maxRow; $r++) {
+            for ($c = 1; $c <= $maxCol; $c++) {
+                $cell = $sheet->getCell(Coordinate::stringFromColumnIndex($c).$r);
+                if ((string) $cell->getValue() === $from) {
+                    $cell->setValue($replacement);
+
+                    return;
+                }
+            }
         }
     }
 }

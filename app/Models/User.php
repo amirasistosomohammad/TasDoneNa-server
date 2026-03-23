@@ -39,6 +39,7 @@ class User extends Authenticatable
         'employee_id',
         'position',
         'division',
+        'district',
         'school_name',
         'avatar_url',
         'profile_avatar_url',
